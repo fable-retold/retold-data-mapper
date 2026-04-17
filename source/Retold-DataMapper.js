@@ -1,240 +1,567 @@
 /**
  * Retold Data Mapper
  *
- * Cross-beacon schema mapping and data sync service. Discovers remote
- * databeacons on the Ultravisor mesh, introspects their schemas, validates
- * declarative field mappings, and executes batch syncs (read from source,
- * transform, write to target) — all without direct database access.
+ * Standalone service for cross-beacon schema mapping. Runs its own Orator
+ * server with the visual mapping editor web UI and a REST API at /mapper/*
+ * that dispatches through the Ultravisor mesh via fable-ultravisor-client.
+ *
+ * Connects to any Ultravisor as a beacon (registers DataMapperSource,
+ * DataMapperRecords, DataMapperTransform capabilities) so operation graphs
+ * in the flow editor can call into it.
  *
  * @author Steven Velozo <steven@velozo.com>
  * @license MIT
  */
 const libFableServiceProviderBase = require('fable-serviceproviderbase');
-const libFableUltravisorClient = require('fable-ultravisor-client');
 
-const libDataMapperDiscovery = require('./services/DataMapper-Discovery.js');
-const libDataMapperValidator = require('./services/DataMapper-Validator.js');
-const libDataMapperSyncEngine = require('./services/DataMapper-SyncEngine.js');
-const libDataMapperReporter = require('./services/DataMapper-Reporter.js');
+const libOrator = require('orator');
+const libOratorServiceServerRestify = require('orator-serviceserver-restify');
+const libOratorStaticServer = require('orator-static-server');
+
+const libMeadow = require('meadow');
+const libMeadowEndpoints = require('meadow-endpoints');
+
+const libPath = require('path');
+const libFs = require('fs');
+
+const libDataMapperConnectionBridge = require('./services/DataMapper-ConnectionBridge.js');
+const libDataMapperBeaconProvider = require('./services/DataMapper-BeaconProvider.js');
+
+let libUltravisorBeacon = null;
+try
+{
+	libUltravisorBeacon = require('ultravisor-beacon');
+}
+catch (pError)
+{
+	// ultravisor-beacon is optional — only needed for beacon registration
+}
+
+let libFableUltravisorClient = null;
+try
+{
+	libFableUltravisorClient = require('fable-ultravisor-client');
+}
+catch (pError)
+{
+	// optional — only needed when dispatching through the mesh
+}
+
+// Embedded schema SQL for SQLite auto-creation
+const DATAMAPPER_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS User (
+	IDUser INTEGER PRIMARY KEY AUTOINCREMENT,
+	GUIDUser TEXT,
+	CreateDate TEXT, CreatingIDUser INTEGER DEFAULT 0,
+	UpdateDate TEXT, UpdatingIDUser INTEGER DEFAULT 0,
+	Deleted INTEGER DEFAULT 0, DeleteDate TEXT, DeletingIDUser INTEGER DEFAULT 0,
+	LoginID TEXT, Name TEXT
+);
+CREATE TABLE IF NOT EXISTS MappingConfig (
+	IDMappingConfig INTEGER PRIMARY KEY AUTOINCREMENT,
+	GUIDMappingConfig TEXT,
+	CreateDate TEXT, CreatingIDUser INTEGER DEFAULT 0,
+	UpdateDate TEXT, UpdatingIDUser INTEGER DEFAULT 0,
+	Deleted INTEGER DEFAULT 0, DeleteDate TEXT, DeletingIDUser INTEGER DEFAULT 0,
+	Name TEXT,
+	Description TEXT,
+	SourceBeaconName TEXT,
+	SourceConnectionHash TEXT,
+	SourceEntity TEXT,
+	TargetBeaconName TEXT,
+	TargetConnectionHash TEXT,
+	TargetEntity TEXT,
+	MappingConfiguration TEXT,
+	FlowDiagramState TEXT
+);
+CREATE TABLE IF NOT EXISTS OperationTemplate (
+	IDOperationTemplate INTEGER PRIMARY KEY AUTOINCREMENT,
+	GUIDOperationTemplate TEXT,
+	CreateDate TEXT, CreatingIDUser INTEGER DEFAULT 0,
+	UpdateDate TEXT, UpdatingIDUser INTEGER DEFAULT 0,
+	Deleted INTEGER DEFAULT 0, DeleteDate TEXT, DeletingIDUser INTEGER DEFAULT 0,
+	Name TEXT,
+	Description TEXT,
+	OperationHash TEXT,
+	OperationJSON TEXT
+);
+INSERT OR IGNORE INTO User (IDUser, LoginID, Name) VALUES (1, 'system', 'System');
+`;
 
 const defaultDataMapperSettings = (
 	{
+		AutoStartOrator: true,
+		AutoCreateSchema: false,
+
+		FullMeadowSchemaPath: `${process.cwd()}/model/`,
+		FullMeadowSchemaFilename: 'MeadowModel-DataMapper.json',
+
+		// Path to the web app folder for static serving; false to skip
+		WebAppPath: false,
+
+		// Endpoint allow-list
+		Endpoints:
+			{
+				MeadowEndpoints: true,
+				ConnectionBridge: true,
+				WebUI: true
+			},
+
+		DataMapper:
+			{
+				RoutePrefix: '/mapper'
+			},
+
+		// If set, connect to Ultravisor on initialize and register capabilities
+		Ultravisor:
+			{
+				URL: '',
+				BeaconName: 'retold-data-mapper',
+				MaxConcurrent: 5
+			}
 	});
 
 class RetoldDataMapper extends libFableServiceProviderBase
 {
 	constructor(pFable, pOptions, pServiceHash)
 	{
-		let tmpOptions = Object.assign({}, defaultDataMapperSettings, pOptions);
+		let tmpOptions = Object.assign({}, JSON.parse(JSON.stringify(defaultDataMapperSettings)), pOptions);
 		super(pFable, tmpOptions, pServiceHash);
 
 		this.serviceType = 'RetoldDataMapper';
 
-		// Sub-services
-		this.fable.serviceManager.addServiceType('DataMapperDiscovery', libDataMapperDiscovery);
-		this.fable.serviceManager.addServiceType('DataMapperValidator', libDataMapperValidator);
-		this.fable.serviceManager.addServiceType('DataMapperSyncEngine', libDataMapperSyncEngine);
-		this.fable.serviceManager.addServiceType('DataMapperReporter', libDataMapperReporter);
+		this.options = Object.assign({}, JSON.parse(JSON.stringify(defaultDataMapperSettings)), this.options);
 
-		this.Discovery = this.fable.serviceManager.instantiateServiceProvider('DataMapperDiscovery');
-		this.Validator = this.fable.serviceManager.instantiateServiceProvider('DataMapperValidator');
-		this.SyncEngine = this.fable.serviceManager.instantiateServiceProvider('DataMapperSyncEngine');
-		this.Reporter = this.fable.serviceManager.instantiateServiceProvider('DataMapperReporter');
+		// Restify + Orator
+		this.fable.serviceManager.addServiceType('OratorServiceServer', libOratorServiceServerRestify);
+		this.fable.serviceManager.addServiceType('Orator', libOrator);
 
-		// Ultravisor client — created during connect()
-		this._Client = null;
-		this._MappingConfig = null;
-	}
+		this.fable.serviceManager.instantiateServiceProvider('OratorServiceServer', this.options);
+		this.fable.serviceManager.instantiateServiceProvider('Orator', this.options);
 
-	/**
-	 * Load a mapping config object.
-	 *
-	 * @param {object} pMappingConfig — parsed mapping JSON
-	 */
-	loadConfig(pMappingConfig)
-	{
-		this._MappingConfig = pMappingConfig;
-	}
+		// Internal Meadow DAL
+		this._Meadow = libMeadow.new(pFable);
+		this._DAL = {};
+		this._MeadowEndpoints = {};
 
-	/**
-	 * Connect to the Ultravisor and authenticate.
-	 *
-	 * @param {function} fCallback — function(pError)
-	 */
-	connect(fCallback)
-	{
-		if (!this._MappingConfig)
-		{
-			return fCallback(new Error('RetoldDataMapper: no mapping config loaded. Call loadConfig() first.'));
-		}
+		let tmpRoutePrefix = this.options.DataMapper.RoutePrefix;
 
-		let tmpUltravisorSettings = this._MappingConfig.Ultravisor || {};
-
-		if (!tmpUltravisorSettings.URL)
-		{
-			return fCallback(new Error('RetoldDataMapper: Ultravisor.URL is required in the mapping config.'));
-		}
-
-		this.fable.serviceManager.addServiceType('UltravisorClient', libFableUltravisorClient);
-		this._Client = this.fable.serviceManager.instantiateServiceProvider('UltravisorClient',
+		this.fable.serviceManager.addServiceType('DataMapperConnectionBridge', libDataMapperConnectionBridge);
+		this.fable.serviceManager.instantiateServiceProvider('DataMapperConnectionBridge',
 			{
-				UltravisorURL: tmpUltravisorSettings.URL,
-				UserName: tmpUltravisorSettings.UserName || '',
-				Password: tmpUltravisorSettings.Password || ''
+				RoutePrefix: tmpRoutePrefix
 			});
 
-		this.log.info(`RetoldDataMapper: authenticating against ${tmpUltravisorSettings.URL} as [${tmpUltravisorSettings.UserName || '(anonymous)'}]`);
+		// Expose DAL on fable for sub-services
+		this.fable.DAL = this._DAL;
+		this.fable.MeadowEndpoints = this._MeadowEndpoints;
 
-		this._Client.authenticate((pError) =>
+		// Beacon state (populated by connectUltravisor)
+		this._BeaconService = null;
+		this._BeaconProvider = null;
+		this._UltravisorClient = null;
+		this._UltravisorURL = '';
+		this._UltravisorStatus = 'Disconnected';
+
+		this.serviceInitialized = false;
+	}
+
+	/**
+	 * Check if an endpoint group is enabled.
+	 */
+	isEndpointGroupEnabled(pGroupName)
+	{
+		if (!this.options.Endpoints)
 		{
-			if (pError)
+			return false;
+		}
+		if (!this.options.Endpoints.hasOwnProperty(pGroupName))
+		{
+			return false;
+		}
+		return !!this.options.Endpoints[pGroupName];
+	}
+
+	/**
+	 * Create the internal SQLite schema (MappingConfig, OperationTemplate).
+	 */
+	createSchema(fCallback)
+	{
+		try
+		{
+			if (this.fable.MeadowSQLiteProvider && this.fable.MeadowSQLiteProvider.db)
 			{
-				this.log.error(`RetoldDataMapper: authentication failed — ${pError.message}`);
-				return fCallback(pError);
+				this.fable.log.info('Creating DataMapper schema (CREATE TABLE IF NOT EXISTS)...');
+				this.fable.MeadowSQLiteProvider.db.exec(DATAMAPPER_SCHEMA_SQL);
+				this.fable.log.info('DataMapper schema created successfully.');
 			}
-			this.log.info('RetoldDataMapper: connected to Ultravisor.');
-			return fCallback(null);
+			else
+			{
+				this.fable.log.warn('No SQLite provider available; skipping schema auto-creation.');
+			}
+		}
+		catch (pError)
+		{
+			this.fable.log.error(`Error creating DataMapper schema: ${pError}`);
+			return fCallback(pError);
+		}
+
+		return fCallback();
+	}
+
+	/**
+	 * Load a parsed model object and create DAL objects + Meadow Endpoints.
+	 */
+	loadModel(pModelName, pModelObject, fCallback)
+	{
+		this.fable.log.info(`DataMapper loading model [${pModelName}]...`);
+
+		let tmpEntityList = Object.keys(pModelObject.Tables);
+
+		this.fable.log.info(`...initializing ${tmpEntityList.length} DAL objects for model [${pModelName}]...`);
+
+		for (let i = 0; i < tmpEntityList.length; i++)
+		{
+			let tmpDALEntityName = tmpEntityList[i];
+			let tmpRoutesAlreadyConnected = this._MeadowEndpoints.hasOwnProperty(tmpDALEntityName);
+
+			try
+			{
+				let tmpDALSchema = pModelObject.Tables[tmpDALEntityName];
+				let tmpDALMeadowSchema = tmpDALSchema.MeadowSchema;
+
+				this._DAL[tmpDALEntityName] = this._Meadow.loadFromPackageObject(tmpDALMeadowSchema);
+				this._DAL[tmpDALEntityName].setProvider('SQLite');
+				this._MeadowEndpoints[tmpDALEntityName] = libMeadowEndpoints.new(this._DAL[tmpDALEntityName]);
+
+				if (!tmpRoutesAlreadyConnected && this.isEndpointGroupEnabled('MeadowEndpoints'))
+				{
+					this._MeadowEndpoints[tmpDALEntityName].connectRoutes(this.fable.OratorServiceServer);
+				}
+			}
+			catch (pError)
+			{
+				this.fable.log.error(`Error initializing DAL for entity [${tmpDALEntityName}]: ${pError}`);
+			}
+		}
+
+		return fCallback();
+	}
+
+	loadModelFromFile(pModelName, pModelPath, pModelFilename, fCallback)
+	{
+		this.fable.log.info(`...loading model [${pModelName}] from file [${pModelPath}${pModelFilename}]...`);
+
+		let tmpModelObject;
+		try
+		{
+			tmpModelObject = require(`${pModelPath}${pModelFilename}`);
+		}
+		catch (pError)
+		{
+			this.fable.log.error(`Error loading model file [${pModelPath}${pModelFilename}]: ${pError}`);
+			return fCallback(pError);
+		}
+
+		return this.loadModel(pModelName, tmpModelObject, fCallback);
+	}
+
+	initializeService(fCallback)
+	{
+		if (this.serviceInitialized)
+		{
+			return fCallback(new Error('RetoldDataMapper is being initialized but has already been initialized...'));
+		}
+
+		let tmpAnticipate = this.fable.newAnticipate();
+
+		this.fable.log.info(`Retold DataMapper is initializing...`);
+
+		// Start Orator
+		tmpAnticipate.anticipate(
+			(fInitCallback) =>
+			{
+				if (this.options.AutoStartOrator)
+				{
+					this.fable.Orator.startWebServer(fInitCallback);
+				}
+				else
+				{
+					return fInitCallback();
+				}
+			});
+
+		// Enable body + query parsing
+		tmpAnticipate.anticipate(
+			(fInitCallback) =>
+			{
+				this.fable.OratorServiceServer.server.use(this.fable.OratorServiceServer.bodyParser());
+				this.fable.OratorServiceServer.server.use(require('restify').plugins.queryParser());
+				return fInitCallback();
+			});
+
+		// Schema auto-create
+		tmpAnticipate.anticipate(
+			(fInitCallback) =>
+			{
+				if (this.options.AutoCreateSchema)
+				{
+					return this.createSchema(fInitCallback);
+				}
+				return fInitCallback();
+			});
+
+		// Load internal Meadow model
+		tmpAnticipate.anticipate(
+			(fInitCallback) =>
+			{
+				if (this.options.FullMeadowSchemaFilename)
+				{
+					let tmpModelName = this.options.FullMeadowSchemaFilename.replace(/\.json$/i, '');
+					return this.loadModelFromFile(tmpModelName, this.options.FullMeadowSchemaPath, this.options.FullMeadowSchemaFilename, fInitCallback);
+				}
+				return fInitCallback();
+			});
+
+		// Wire sub-service routes
+		tmpAnticipate.anticipate(
+			(fInitCallback) =>
+			{
+				if (this.isEndpointGroupEnabled('ConnectionBridge'))
+				{
+					this.fable.DataMapperConnectionBridge.setOwner(this);
+					this.fable.DataMapperConnectionBridge.connectRoutes(this.fable.OratorServiceServer);
+				}
+				return fInitCallback();
+			});
+
+		// Serve static web UI + pict.min.js
+		tmpAnticipate.anticipate(
+			(fInitCallback) =>
+			{
+				if (!this.isEndpointGroupEnabled('WebUI'))
+				{
+					return fInitCallback();
+				}
+
+				let tmpWebAppPath = this.options.WebAppPath;
+				if (!tmpWebAppPath)
+				{
+					tmpWebAppPath = libPath.join(__dirname, 'services', 'web-app', 'web');
+				}
+
+				this.fable.log.info(`Serving DataMapper web UI from ${tmpWebAppPath}`);
+
+				let tmpPictMinJsPath;
+				try
+				{
+					tmpPictMinJsPath = require.resolve('pict/dist/pict.min.js');
+				}
+				catch (pResolveError)
+				{
+					this.fable.log.warn(`Could not resolve pict.min.js: ${pResolveError}`);
+				}
+
+				if (tmpPictMinJsPath)
+				{
+					this.fable.OratorServiceServer.doGet('/pict.min.js',
+						(pRequest, pResponse, fNext) =>
+						{
+							libFs.readFile(tmpPictMinJsPath, 'utf8',
+								(pError, pData) =>
+								{
+									if (pError)
+									{
+										pResponse.send(500, { Error: 'Could not read pict.min.js' });
+										return fNext();
+									}
+									pResponse.setHeader('Content-Type', 'application/javascript');
+									pResponse.sendRaw(200, pData);
+									return fNext();
+								});
+						});
+				}
+
+				this.fable.serviceManager.addServiceType('OratorStaticServer', libOratorStaticServer);
+				let tmpStaticServer = this.fable.serviceManager.instantiateServiceProvider('OratorStaticServer');
+
+				tmpStaticServer.addStaticRoute(tmpWebAppPath, 'index.html', '/*', '/');
+
+				return fInitCallback();
+			});
+
+		// Optional: auto-connect to Ultravisor
+		tmpAnticipate.anticipate(
+			(fInitCallback) =>
+			{
+				let tmpURL = this.options.Ultravisor && this.options.Ultravisor.URL;
+				if (!tmpURL)
+				{
+					return fInitCallback();
+				}
+
+				this.connectUltravisor(tmpURL, this.options.Ultravisor.BeaconName, this.options.Ultravisor.Password || '',
+					(pError) =>
+					{
+						if (pError)
+						{
+							this.fable.log.warn(`Auto-connect to Ultravisor failed: ${pError.message || pError}`);
+						}
+						return fInitCallback();
+					});
+			});
+
+		tmpAnticipate.wait(
+			(pError) =>
+			{
+				if (pError)
+				{
+					this.log.error(`Error initializing Retold DataMapper: ${pError}`);
+					return fCallback(pError);
+				}
+				this.serviceInitialized = true;
+				return fCallback();
+			});
+	}
+
+	/**
+	 * Connect to an Ultravisor as a beacon and register capabilities.
+	 */
+	connectUltravisor(pURL, pBeaconName, pPassword, fCallback)
+	{
+		if (!libUltravisorBeacon)
+		{
+			return fCallback(new Error('ultravisor-beacon not installed'));
+		}
+		if (!libFableUltravisorClient)
+		{
+			return fCallback(new Error('fable-ultravisor-client not installed'));
+		}
+
+		let tmpBeaconName = pBeaconName || this.options.Ultravisor.BeaconName || 'retold-data-mapper';
+		let tmpPassword = pPassword || (this.options.Ultravisor && this.options.Ultravisor.Password) || '';
+		let tmpMaxConcurrent = (this.options.Ultravisor && this.options.Ultravisor.MaxConcurrent) || 5;
+
+		if (this._BeaconService)
+		{
+			this.fable.log.info('Disconnecting existing Ultravisor beacon before reconnecting...');
+			try { this._BeaconService.disable(() => {}); } catch (e) { /* ignore */ }
+			this._BeaconService = null;
+		}
+
+		this.fable.addServiceTypeIfNotExists('UltravisorBeacon', libUltravisorBeacon);
+		this._BeaconService = this.fable.instantiateServiceProviderWithoutRegistration('UltravisorBeacon',
+			{
+				ServerURL: pURL,
+				Name: tmpBeaconName,
+				Password: tmpPassword,
+				MaxConcurrent: tmpMaxConcurrent,
+				StagingPath: process.cwd()
+			});
+
+		this.fable.serviceManager.addServiceTypeIfNotExists('DataMapperBeaconProvider', libDataMapperBeaconProvider);
+		this._BeaconProvider = this.fable.serviceManager.instantiateServiceProviderIfNotExists('DataMapperBeaconProvider');
+		this._BeaconProvider.configureClient(pURL);
+		this._BeaconProvider.registerCapabilities(this._BeaconService);
+
+		// Keep a direct client handle for /mapper/* REST dispatches
+		this.fable.addServiceTypeIfNotExists('UltravisorClient', libFableUltravisorClient);
+		this._UltravisorClient = this.fable.instantiateServiceProviderWithoutRegistration('UltravisorClient',
+			{
+				UltravisorURL: pURL,
+				UserName: tmpBeaconName,
+				Password: tmpPassword
+			});
+		this._UltravisorURL = pURL;
+
+		this._UltravisorClient.authenticate((pAuthError) =>
+		{
+			if (pAuthError)
+			{
+				this.fable.log.warn(`UltravisorClient auth failed: ${pAuthError.message || pAuthError}`);
+			}
+
+			this._BeaconService.enable((pEnableError) =>
+			{
+				if (pEnableError)
+				{
+					this._UltravisorStatus = 'Failed';
+					return fCallback(pEnableError);
+				}
+				this._UltravisorStatus = 'Connected';
+				this.fable.log.info(`DataMapper connected to Ultravisor at ${pURL} as [${tmpBeaconName}].`);
+				return fCallback(null);
+			});
 		});
 	}
 
 	/**
-	 * Execute the full mapping pipeline: discover → validate → sync → report.
-	 *
-	 * @param {object} pOptions — { DryRun, Verbose }
-	 * @param {function} fCallback — function(pError, pReport)
+	 * Disconnect the Ultravisor beacon.
 	 */
-	run(pOptions, fCallback)
+	disconnectUltravisor(fCallback)
 	{
-		if (typeof (pOptions) === 'function')
+		if (!this._BeaconService)
 		{
-			fCallback = pOptions;
-			pOptions = {};
+			this._UltravisorStatus = 'Disconnected';
+			return fCallback();
 		}
 
-		let tmpOptions = Object.assign(
+		this._BeaconService.disable((pError) =>
+		{
+			this._BeaconService = null;
+			this._UltravisorClient = null;
+			this._UltravisorStatus = 'Disconnected';
+			return fCallback(pError);
+		});
+	}
+
+	getUltravisorStatus()
+	{
+		return {
+			Connected: this._UltravisorStatus === 'Connected',
+			Status: this._UltravisorStatus,
+			URL: this._UltravisorURL,
+			BeaconName: (this.options.Ultravisor && this.options.Ultravisor.BeaconName) || 'retold-data-mapper'
+		};
+	}
+
+	getUltravisorClient()
+	{
+		return this._UltravisorClient;
+	}
+
+	stopService(fCallback)
+	{
+		if (!this.serviceInitialized)
+		{
+			return fCallback(new Error('RetoldDataMapper is being stopped but is not initialized...'));
+		}
+
+		this.fable.log.info(`Retold DataMapper is stopping`);
+
+		let tmpAnticipate = this.fable.newAnticipate();
+
+		tmpAnticipate.anticipate(
+			(fStepCallback) =>
 			{
-				DryRun: false,
-				Verbose: false
-			},
-			this._MappingConfig.Options || {},
-			pOptions);
+				this.disconnectUltravisor(() => fStepCallback());
+			});
 
-		if (!this._Client)
-		{
-			return fCallback(new Error('RetoldDataMapper: not connected. Call connect() first.'));
-		}
+		tmpAnticipate.anticipate(this.fable.Orator.stopWebServer.bind(this.fable.Orator));
 
-		if (!this._MappingConfig)
-		{
-			return fCallback(new Error('RetoldDataMapper: no mapping config loaded.'));
-		}
-
-		let tmpConfig = this._MappingConfig;
-		let tmpDiscovery = this.Discovery;
-		let tmpValidator = this.Validator;
-		let tmpSyncEngine = this.SyncEngine;
-		let tmpReporter = this.Reporter;
-		let tmpClient = this._Client;
-		let tmpSelf = this;
-
-		tmpReporter.begin(tmpConfig.Name || 'unnamed-sync');
-
-		// Step 1: Introspect source + target schemas
-		tmpSelf.log.info('RetoldDataMapper: introspecting source beacon...');
-		tmpDiscovery.introspectBeacon(tmpClient, tmpConfig.Source.BeaconName, tmpConfig.Source.IDBeaconConnection,
-			(pSourceError, pSourceSchema) =>
+		tmpAnticipate.wait(
+			(pError) =>
 			{
-				if (pSourceError)
+				if (pError)
 				{
-					tmpReporter.addError('Discovery', `Source introspection failed: ${pSourceError.message}`);
-					return fCallback(pSourceError, tmpReporter.toJSON());
+					this.log.error(`Error stopping Retold DataMapper: ${pError}`);
+					return fCallback(pError);
 				}
-
-				tmpSelf.log.info(`RetoldDataMapper: source schema has ${pSourceSchema.Tables.length} tables.`);
-				tmpSelf.log.info('RetoldDataMapper: introspecting target beacon...');
-
-				tmpDiscovery.introspectBeacon(tmpClient, tmpConfig.Target.BeaconName, tmpConfig.Target.IDBeaconConnection,
-					(pTargetError, pTargetSchema) =>
-					{
-						if (pTargetError)
-						{
-							tmpReporter.addError('Discovery', `Target introspection failed: ${pTargetError.message}`);
-							return fCallback(pTargetError, tmpReporter.toJSON());
-						}
-
-						tmpSelf.log.info(`RetoldDataMapper: target schema has ${pTargetSchema.Tables.length} tables.`);
-
-						// Step 2: Validate all entity mappings
-						let tmpValidation = tmpValidator.validate(tmpConfig.EntityMappings, pSourceSchema, pTargetSchema);
-
-						if (!tmpValidation.Valid)
-						{
-							tmpSelf.log.error('RetoldDataMapper: validation failed.');
-							for (let i = 0; i < tmpValidation.Errors.length; i++)
-							{
-								tmpSelf.log.error(`  - ${tmpValidation.Errors[i]}`);
-								tmpReporter.addError('Validation', tmpValidation.Errors[i]);
-							}
-							return fCallback(new Error('Mapping validation failed'), tmpReporter.toJSON());
-						}
-
-						if (tmpValidation.Warnings.length > 0)
-						{
-							for (let i = 0; i < tmpValidation.Warnings.length; i++)
-							{
-								tmpSelf.log.warn(`  - ${tmpValidation.Warnings[i]}`);
-							}
-						}
-
-						tmpSelf.log.info('RetoldDataMapper: validation passed.');
-
-						// Step 3: If dry-run, stop here
-						if (tmpOptions.DryRun)
-						{
-							tmpSelf.log.info('RetoldDataMapper: dry-run mode — skipping sync.');
-							tmpReporter.finish();
-							return fCallback(null, tmpReporter.toJSON());
-						}
-
-						// Step 4: Execute sync for each entity mapping sequentially
-						let tmpEntityMappings = tmpConfig.EntityMappings || [];
-						let tmpEntityIndex = 0;
-
-						let fSyncNext = () =>
-						{
-							if (tmpEntityIndex >= tmpEntityMappings.length)
-							{
-								tmpReporter.finish();
-								return fCallback(null, tmpReporter.toJSON());
-							}
-
-							let tmpEntityMapping = tmpEntityMappings[tmpEntityIndex];
-							tmpEntityIndex++;
-
-							tmpSelf.log.info(`RetoldDataMapper: syncing ${tmpEntityMapping.SourceEntity} → ${tmpEntityMapping.TargetEntity}...`);
-
-							tmpSyncEngine.sync(
-								tmpEntityMapping,
-								tmpClient,
-								tmpConfig.Source,
-								tmpConfig.Target,
-								tmpOptions,
-								tmpReporter,
-								(pSyncError) =>
-								{
-									if (pSyncError && !tmpOptions.ContinueOnError)
-									{
-										tmpReporter.finish();
-										return fCallback(pSyncError, tmpReporter.toJSON());
-									}
-									return fSyncNext();
-								});
-						};
-
-						fSyncNext();
-					});
+				this.serviceInitialized = false;
+				return fCallback();
 			});
 	}
 }
 
 module.exports = RetoldDataMapper;
+module.exports.DATAMAPPER_SCHEMA_SQL = DATAMAPPER_SCHEMA_SQL;

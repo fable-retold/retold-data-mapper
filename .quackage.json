@@ -1,0 +1,19 @@
+{
+	"GulpfileConfiguration":
+	{
+		"EntrypointInputSourceFile": "{~Data:AppData.CWD~}/source/services/web-app/pict-app/Pict-DataMapper-Bundle.js",
+		"LibraryObjectName": "retoldDataMapper",
+		"LibraryOutputFolder": "{~Data:AppData.CWD~}/source/services/web-app/web/",
+		"LibraryUniminifiedFileName": "retold-data-mapper.{~Data:Record.BuildFileLabel~}js",
+		"LibraryMinifiedFileName": "retold-data-mapper.{~Data:Record.BuildFileLabel~}min.js"
+	},
+	"GulpExecutions":
+	[
+		{
+			"Hash": "default",
+			"Name": "Default standard build.",
+			"BuildFileLabel": "",
+			"BrowsersListRC": "since 2022"
+		}
+	]
+}

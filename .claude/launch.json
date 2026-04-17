@@ -1,0 +1,11 @@
+{
+	"version": "0.0.1",
+	"configurations": [
+		{
+			"name": "retold-data-mapper",
+			"runtimeExecutable": "node",
+			"runtimeArgs": ["bin/retold-data-mapper.js", "serve", "--port", "18400", "--db", "data/datamapper-preview.sqlite"],
+			"port": 18400
+		}
+	]
+}

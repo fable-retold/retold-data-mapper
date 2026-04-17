@@ -2,34 +2,21 @@
 /**
  * Retold Data Mapper — CLI Entry Point
  *
- * Starts the data mapper as a beacon that connects to an Ultravisor.
- * Once connected, the mapper's capabilities auto-register as task types
- * in the Ultravisor's flow editor palette.
+ * Starts the Data Mapper as a standalone service:
+ *   - its own Orator HTTP server (default port 8395)
+ *   - web UI at http://localhost:<port>/
+ *   - REST API at /mapper/*
+ *   - optionally connects to an Ultravisor as a beacon
  *
- * Modes:
- *   beacon (default)    Connect to an Ultravisor as a beacon service
- *   batch               Legacy CLI batch sync (v0 plumbing)
- *
- * Usage:
- *   retold-data-mapper --ultravisor http://localhost:8422
- *   retold-data-mapper --ultravisor http://localhost:8422 --name my-mapper
- *   retold-data-mapper batch --config mapping.json --run
+ * Subcommands:
+ *   serve (default)     Start the API server + web UI
+ *   init                Create the internal SQLite schema
  *
  * @author Steven Velozo <steven@velozo.com>
  */
-const libFable = require('fable');
-const libFableServiceProviderBase = require('fable-serviceproviderbase');
-const libDataMapperBeaconProvider = require('../source/services/DataMapper-BeaconProvider.js');
-
-let libBeaconService = null;
-try
-{
-	libBeaconService = require('ultravisor-beacon');
-}
-catch (pError)
-{
-	// ultravisor-beacon not installed — beacon mode unavailable
-}
+const libPict = require('pict');
+const libMeadowConnectionManager = require('meadow-connection-manager');
+const libRetoldDataMapper = require('../source/Retold-DataMapper.js');
 
 const libFs = require('fs');
 const libPath = require('path');
@@ -38,21 +25,70 @@ const libPath = require('path');
 // CLI Argument Parsing
 // ================================================================
 
+let _CLIConfig = null;
+let _CLILogPath = null;
+let _CLIPort = null;
+let _CLIDBPath = null;
+let _CLICommand = 'serve';
 let _CLIUltravisorURL = '';
 let _CLIBeaconName = 'retold-data-mapper';
-let _CLICommand = 'beacon';
-let _CLIConfigPath = null;
-let _CLIDryRun = false;
 let _CLIVerbose = false;
-let _CLIRun = false;
 
 let tmpArgs = process.argv.slice(2);
+let tmpPositionalIndex = 0;
 
 for (let i = 0; i < tmpArgs.length; i++)
 {
 	let tmpArg = tmpArgs[i];
 
-	if (tmpArg === '--ultravisor' || tmpArg === '-u')
+	if (tmpArg === '--config' || tmpArg === '-c')
+	{
+		if (tmpArgs[i + 1])
+		{
+			let tmpConfigPath = libPath.resolve(tmpArgs[i + 1]);
+			try
+			{
+				let tmpRaw = libFs.readFileSync(tmpConfigPath, 'utf8');
+				_CLIConfig = JSON.parse(tmpRaw);
+				console.log(`Retold DataMapper: Loaded config from ${tmpConfigPath}`);
+			}
+			catch (pConfigError)
+			{
+				console.error(`Retold DataMapper: Failed to load config from ${tmpConfigPath}: ${pConfigError.message}`);
+				process.exit(1);
+			}
+			i++;
+		}
+	}
+	else if (tmpArg === '--port' || tmpArg === '-p')
+	{
+		if (tmpArgs[i + 1])
+		{
+			_CLIPort = parseInt(tmpArgs[i + 1], 10);
+			i++;
+		}
+	}
+	else if (tmpArg === '--db' || tmpArg === '-d')
+	{
+		if (tmpArgs[i + 1])
+		{
+			_CLIDBPath = libPath.resolve(tmpArgs[i + 1]);
+			i++;
+		}
+	}
+	else if (tmpArg === '--log' || tmpArg === '-l')
+	{
+		if (tmpArgs[i + 1] && !tmpArgs[i + 1].startsWith('-'))
+		{
+			_CLILogPath = libPath.resolve(tmpArgs[i + 1]);
+			i++;
+		}
+		else
+		{
+			_CLILogPath = `${process.cwd()}/DataMapper-Run-${Date.now()}.log`;
+		}
+	}
+	else if (tmpArg === '--ultravisor' || tmpArg === '-u')
 	{
 		if (tmpArgs[i + 1]) { _CLIUltravisorURL = tmpArgs[i + 1]; i++; }
 	}
@@ -60,206 +96,209 @@ for (let i = 0; i < tmpArgs.length; i++)
 	{
 		if (tmpArgs[i + 1]) { _CLIBeaconName = tmpArgs[i + 1]; i++; }
 	}
-	else if (tmpArg === '--config' || tmpArg === '-c')
+	else if (tmpArg === '--verbose' || tmpArg === '-v')
 	{
-		if (tmpArgs[i + 1]) { _CLIConfigPath = libPath.resolve(tmpArgs[i + 1]); i++; }
+		_CLIVerbose = true;
 	}
-	else if (tmpArg === '--dry-run') { _CLIDryRun = true; _CLIRun = true; }
-	else if (tmpArg === '--run') { _CLIRun = true; }
-	else if (tmpArg === '--verbose' || tmpArg === '-v') { _CLIVerbose = true; }
-	else if (tmpArg === '--help' || tmpArg === '-h') { printHelp(); process.exit(0); }
-	else if (tmpArg === 'beacon') { _CLICommand = 'beacon'; }
-	else if (tmpArg === 'batch') { _CLICommand = 'batch'; }
+	else if (tmpArg === '--help' || tmpArg === '-h')
+	{
+		printHelp();
+		process.exit(0);
+	}
+	else if (!tmpArg.startsWith('-'))
+	{
+		if (tmpPositionalIndex === 0)
+		{
+			_CLICommand = tmpArg;
+		}
+		tmpPositionalIndex++;
+	}
 }
 
 function printHelp()
 {
 	console.log(`
-Retold Data Mapper — Cross-Beacon Schema Mapping & Data Sync
+Retold Data Mapper — Visual Cross-Beacon Schema Mapping
 
 Usage:
-  retold-data-mapper --ultravisor <url>           Start as a beacon (default)
-  retold-data-mapper batch --config <path> --run  Legacy CLI batch sync
+  retold-data-mapper [command] [options]
 
-Beacon Mode (default):
-  --ultravisor, -u <url>  Ultravisor URL (e.g. http://localhost:8422)
-  --name, -n <name>       Beacon name (default: retold-data-mapper)
+Commands:
+  serve                   Start the API server + web UI (default)
+  init                    Create the internal SQLite schema
 
-  Connects to the Ultravisor as a beacon. The mapper's capabilities
-  (IntrospectSource, PullRecords, MapRecords, BuildComprehension,
-  WriteRecords) auto-register as task types in the flow editor palette.
-  The process stays running — Ctrl-C to disconnect.
-
-Batch Mode:
-  batch                   Use legacy CLI batch sync
-  --config, -c <path>     Path to a mapping config JSON file
-  --run                   Execute the sync pipeline
-  --dry-run               Validate only — report what would be synced
-  --verbose, -v           Log each batch during sync
+Options:
+  --config, -c <path>     Path to a JSON config file
+  --port, -p <port>       API server port (default: 8395)
+  --db, -d <path>         SQLite database file (default: ./data/datamapper.sqlite)
+  --ultravisor, -u <url>  Connect to Ultravisor on startup (e.g. http://localhost:8422)
+  --name, -n <name>       Beacon name on the Ultravisor (default: retold-data-mapper)
+  --log, -l [path]        Write log output to a file
+  --verbose, -v           Verbose logging
+  --help, -h              Show this help
 
 Examples:
-  retold-data-mapper --ultravisor http://localhost:8422
-  retold-data-mapper -u http://my-ultravisor:8422 -n customer-mapper
-  retold-data-mapper batch -c mapping.json --run
+  retold-data-mapper                                   Start on port 8395
+  retold-data-mapper --port 9000                       Custom port
+  retold-data-mapper --ultravisor http://localhost:8422  Auto-connect on startup
+  retold-data-mapper init                              Create database tables
 `);
 }
 
 // ================================================================
-// Beacon Mode
+// Configuration
 // ================================================================
 
-if (_CLICommand === 'beacon')
+let _DefaultDBPath = libPath.join(process.cwd(), 'data', 'datamapper.sqlite');
+
+let _Settings =
+	{
+		Product: 'RetoldDataMapper',
+		ProductVersion: '0.0.1',
+		APIServerPort: _CLIPort || parseInt(process.env.PORT, 10) || 8395,
+		LogStreams:
+			[
+				{
+					streamtype: 'console',
+					level: _CLIVerbose ? 'trace' : 'info'
+				}
+			],
+		SQLite:
+			{
+				SQLiteFilePath: _CLIDBPath || _DefaultDBPath
+			}
+	};
+
+if (_CLIConfig)
 {
-	if (!_CLIUltravisorURL)
-	{
-		console.error('Error: --ultravisor <url> is required for beacon mode.');
-		console.error('  Example: retold-data-mapper --ultravisor http://localhost:8422');
-		process.exit(1);
-	}
+	Object.assign(_Settings, _CLIConfig);
+}
 
-	if (!libBeaconService)
-	{
-		console.error('Error: ultravisor-beacon module is not installed. Run: npm install ultravisor-beacon');
-		process.exit(1);
-	}
-
-	// Use Pict (not plain Fable) so parseTemplate is available for
-	// TabularTransform's {~D:Record.Field~} template expressions.
-	let libPict = require('pict');
-	let _Fable = new libPict(
+if (_CLILogPath)
+{
+	_Settings.LogStreams.push(
 		{
-			Product: 'RetoldDataMapper',
-			ProductVersion: '0.0.1',
-			LogStreams:
-				[
-					{
-						streamtype: 'console',
-						level: _CLIVerbose ? 'trace' : 'info'
-					}
-				]
+			loggertype: 'simpleflatfile',
+			outputloglinestoconsole: false,
+			showtimestamps: true,
+			formattedtimestamps: true,
+			level: 'trace',
+			path: _CLILogPath
 		});
+}
 
-	// Create the beacon service
-	_Fable.addServiceTypeIfNotExists('UltravisorBeacon', libBeaconService);
+if (_CLICommand !== 'serve')
+{
+	_Settings.LogStreams = [{ streamtype: 'console', level: 'warn' }];
+}
 
-	let _BeaconService = _Fable.instantiateServiceProviderWithoutRegistration('UltravisorBeacon',
-		{
-			ServerURL: _CLIUltravisorURL,
-			Name: _CLIBeaconName,
-			Password: '',
-			MaxConcurrent: 5,
-			StagingPath: process.cwd()
-		});
+let _DataDir = libPath.dirname(_Settings.SQLite.SQLiteFilePath);
+if (_DataDir !== ':memory:' && !libFs.existsSync(_DataDir))
+{
+	libFs.mkdirSync(_DataDir, { recursive: true });
+}
 
-	// Register DataMapper capabilities
-	_Fable.serviceManager.addServiceType('DataMapperBeaconProvider', libDataMapperBeaconProvider);
-	let _BeaconProvider = _Fable.serviceManager.instantiateServiceProvider('DataMapperBeaconProvider');
-	_BeaconProvider.configureClient(_CLIUltravisorURL);
-	_BeaconProvider.registerCapabilities(_BeaconService);
+// ================================================================
+// Bootstrap
+// ================================================================
 
-	// Connect
-	console.log(`Retold Data Mapper: connecting to ${_CLIUltravisorURL} as [${_CLIBeaconName}]...`);
+let _Fable = new libPict(_Settings);
 
-	_BeaconService.enable((pError) =>
+_Fable.serviceManager.addServiceType('MeadowConnectionManager', libMeadowConnectionManager);
+_Fable.serviceManager.instantiateServiceProvider('MeadowConnectionManager');
+
+_Fable.MeadowConnectionManager.connect('datamapper',
+	{
+		Type: 'SQLite',
+		SQLiteFilePath: _Settings.SQLite.SQLiteFilePath
+	},
+	(pError, pConnection) =>
 	{
 		if (pError)
 		{
-			console.error(`Connection failed: ${pError.message}`);
+			console.error(`SQLite connection error: ${pError}`);
 			process.exit(1);
 		}
 
-		console.log(`Retold Data Mapper: connected as beacon [${_CLIBeaconName}].`);
-		console.log('');
-		console.log('Registered capabilities:');
-		console.log('  DataMapperSource:IntrospectSource');
-		console.log('  DataMapperRecords:PullRecords');
-		console.log('  DataMapperRecords:WriteRecords');
-		console.log('  DataMapperTransform:MapRecords');
-		console.log('  DataMapperTransform:BuildComprehension');
-		console.log('');
-		console.log('These are now available as task types in the Ultravisor flow editor.');
-		console.log('Press Ctrl-C to disconnect.');
+		_Fable.MeadowSQLiteProvider = pConnection.instance;
+		_Fable.settings.MeadowProvider = 'SQLite';
+
+		switch (_CLICommand)
+		{
+			case 'serve':
+				commandServe();
+				break;
+			case 'init':
+				commandInit();
+				break;
+			default:
+				console.error(`Unknown command: ${_CLICommand}`);
+				printHelp();
+				process.exit(1);
+		}
+	});
+
+function commandServe()
+{
+	_Fable.serviceManager.addServiceType('RetoldDataMapper', libRetoldDataMapper);
+	let tmpMapperService = _Fable.serviceManager.instantiateServiceProvider('RetoldDataMapper',
+		{
+			AutoCreateSchema: true,
+
+			FullMeadowSchemaPath: libPath.join(__dirname, '..', 'model') + '/',
+			FullMeadowSchemaFilename: 'MeadowModel-DataMapper.json',
+
+			Endpoints:
+				{
+					MeadowEndpoints: true,
+					ConnectionBridge: true,
+					WebUI: true
+				},
+
+			Ultravisor:
+				{
+					URL: _CLIUltravisorURL,
+					BeaconName: _CLIBeaconName
+				}
+		});
+
+	tmpMapperService.initializeService((pInitError) =>
+	{
+		if (pInitError)
+		{
+			_Fable.log.error(`Initialization error: ${pInitError}`);
+			process.exit(1);
+		}
+		_Fable.log.info(`Retold DataMapper running on port ${_Settings.APIServerPort}`);
+		_Fable.log.info(`API:    http://localhost:${_Settings.APIServerPort}/mapper/`);
+		_Fable.log.info(`Web UI: http://localhost:${_Settings.APIServerPort}/`);
+		if (_CLIUltravisorURL)
+		{
+			_Fable.log.info(`Ultravisor: ${_CLIUltravisorURL} (beacon: ${_CLIBeaconName})`);
+		}
 	});
 
 	process.on('SIGINT', () =>
 	{
-		console.log('\nDisconnecting...');
-		_BeaconService.disable(() =>
-		{
-			console.log('Disconnected.');
-			process.exit(0);
-		});
-	});
-
-	process.on('SIGTERM', () =>
-	{
-		_BeaconService.disable(() => { process.exit(0); });
+		console.log('\nShutting down...');
+		tmpMapperService.stopService(() => process.exit(0));
+		setTimeout(() => process.exit(0), 5000);
 	});
 }
 
-// ================================================================
-// Batch Mode (legacy v0 plumbing)
-// ================================================================
-
-else if (_CLICommand === 'batch')
+function commandInit()
 {
-	const libRetoldDataMapper = require('../source/Retold-DataMapper.js');
-
-	if (!_CLIConfigPath)
-	{
-		console.error('Error: --config <path> is required for batch mode.');
-		process.exit(1);
-	}
-	if (!_CLIRun)
-	{
-		console.error('Error: specify --run or --dry-run.');
-		process.exit(1);
-	}
-
-	let _MappingConfig = null;
+	console.log('Initializing DataMapper database schema...');
 	try
 	{
-		_MappingConfig = JSON.parse(libFs.readFileSync(_CLIConfigPath, 'utf8'));
-		console.log(`Retold DataMapper: loaded config from ${_CLIConfigPath}`);
+		_Fable.MeadowSQLiteProvider.db.exec(libRetoldDataMapper.DATAMAPPER_SCHEMA_SQL);
+		console.log('Schema created successfully.');
+		console.log(`Database: ${_Settings.SQLite.SQLiteFilePath}`);
 	}
 	catch (pError)
 	{
-		console.error(`Failed to load config: ${pError.message}`);
+		console.error(`Error creating schema: ${pError.message}`);
 		process.exit(1);
 	}
-
-	let _Fable = new libFable(
-		{
-			Product: 'RetoldDataMapper',
-			ProductVersion: '0.0.1',
-			LogStreams: [{ streamtype: 'console', level: _CLIVerbose ? 'trace' : 'info' }]
-		});
-
-	_Fable.serviceManager.addServiceType('RetoldDataMapper', libRetoldDataMapper);
-	let _Mapper = _Fable.serviceManager.instantiateServiceProvider('RetoldDataMapper');
-	_Mapper.loadConfig(_MappingConfig);
-
-	_Mapper.connect((pConnectError) =>
-	{
-		if (pConnectError) { console.error(`Connection failed: ${pConnectError.message}`); process.exit(1); }
-
-		_Mapper.run(
-			{
-				DryRun: _CLIDryRun,
-				Verbose: _CLIVerbose,
-				BatchSize: (_MappingConfig.Options && _MappingConfig.Options.BatchSize) || 100,
-				ContinueOnError: (_MappingConfig.Options && _MappingConfig.Options.ContinueOnError) || false
-			},
-			(pRunError, pReport) =>
-			{
-				if (pReport)
-				{
-					console.log('');
-					console.log(_Mapper.Reporter.summary());
-				}
-				if (pRunError) { console.error(`\nSync completed with errors: ${pRunError.message}`); process.exit(1); }
-				let tmpHasErrors = pReport && pReport.Errors && pReport.Errors.length > 0;
-				process.exit(tmpHasErrors ? 1 : 0);
-			});
-	});
+	process.exit(0);
 }

@@ -1,7 +1,7 @@
 {
 	"name": "retold-data-mapper",
 	"version": "0.0.1",
-	"description": "Cross-beacon schema mapping and data sync — discover remote databeacons on the Ultravisor mesh, define field mappings, and execute batch syncs without direct database access.",
+	"description": "Standalone service for cross-beacon schema mapping — runs its own Orator + Pict web UI on its own port, dispatches mesh operations via fable-ultravisor-client, registers DataMapper capabilities on any Ultravisor as a beacon.",
 	"main": "source/Retold-DataMapper.js",
 	"bin": {
 		"retold-data-mapper": "bin/retold-data-mapper.js"
@@ -9,9 +9,10 @@
 	"scripts": {
 		"start": "node bin/retold-data-mapper.js",
 		"dev": "node test/dev-server.js",
+		"interactive": "node test/harness/interactive.js",
 		"seed": "node test/harness/seed-databases.js",
-		"execute": "node test/execute-operation.js",
-		"integration": "node test/integration-harness.js",
+		"harness": "node test/harness/run-harness.js",
+		"build": "npx quack build",
 		"test": "npx quack test",
 		"coverage": "npx quack coverage"
 	},
@@ -60,9 +61,17 @@
 		"fable": "^3.1.70",
 		"fable-serviceproviderbase": "^3.0.19",
 		"fable-ultravisor-client": "^0.0.1",
+		"meadow": "^2.0.37",
 		"meadow-connection-manager": "^1.0.2",
+		"meadow-connection-sqlite": "^1.0.18",
+		"meadow-endpoints": "^4.0.14",
 		"meadow-integration": "^1.0.35",
+		"orator": "^6.0.4",
+		"orator-serviceserver-restify": "^2.0.10",
+		"orator-static-server": "^2.0.4",
 		"pict": "^1.0.364",
+		"pict-application": "^1.0.33",
+		"pict-view": "^1.0.68",
 		"retold-databeacon": "^0.0.6",
 		"ultravisor": "^1.0.23",
 		"ultravisor-beacon": "^0.0.11"

@@ -1,0 +1,132 @@
+{
+	"Tables": {
+		"MappingConfig": {
+			"TableName": "MappingConfig",
+			"Domain": "Default",
+			"Columns": [
+				{ "Column": "IDMappingConfig", "DataType": "ID" },
+				{ "Column": "GUIDMappingConfig", "DataType": "GUID", "Size": "36" },
+				{ "Column": "CreateDate", "DataType": "DateTime" },
+				{ "Column": "CreatingIDUser", "DataType": "Numeric", "Size": "int" },
+				{ "Column": "UpdateDate", "DataType": "DateTime" },
+				{ "Column": "UpdatingIDUser", "DataType": "Numeric", "Size": "int" },
+				{ "Column": "Deleted", "DataType": "Boolean" },
+				{ "Column": "DeleteDate", "DataType": "DateTime" },
+				{ "Column": "DeletingIDUser", "DataType": "Numeric", "Size": "int" },
+				{ "Column": "Name", "DataType": "String", "Size": "200" },
+				{ "Column": "Description", "DataType": "Text" },
+				{ "Column": "SourceBeaconName", "DataType": "String", "Size": "200" },
+				{ "Column": "SourceConnectionHash", "DataType": "String", "Size": "200" },
+				{ "Column": "SourceEntity", "DataType": "String", "Size": "200" },
+				{ "Column": "TargetBeaconName", "DataType": "String", "Size": "200" },
+				{ "Column": "TargetConnectionHash", "DataType": "String", "Size": "200" },
+				{ "Column": "TargetEntity", "DataType": "String", "Size": "200" },
+				{ "Column": "MappingConfiguration", "DataType": "Text" },
+				{ "Column": "FlowDiagramState", "DataType": "Text" }
+			],
+			"Description": "Stores saved mapping configurations from the visual editor.",
+			"MeadowSchema": {
+				"Scope": "MappingConfig",
+				"DefaultIdentifier": "IDMappingConfig",
+				"Domain": "Default",
+				"Schema": [
+					{ "Column": "IDMappingConfig", "Type": "AutoIdentity", "Size": "Default" },
+					{ "Column": "GUIDMappingConfig", "Type": "AutoGUID", "Size": "36" },
+					{ "Column": "CreateDate", "Type": "CreateDate", "Size": "Default" },
+					{ "Column": "CreatingIDUser", "Type": "CreateIDUser", "Size": "int" },
+					{ "Column": "UpdateDate", "Type": "UpdateDate", "Size": "Default" },
+					{ "Column": "UpdatingIDUser", "Type": "UpdateIDUser", "Size": "int" },
+					{ "Column": "Deleted", "Type": "Deleted", "Size": "Default" },
+					{ "Column": "DeleteDate", "Type": "DeleteDate", "Size": "Default" },
+					{ "Column": "DeletingIDUser", "Type": "DeleteIDUser", "Size": "int" },
+					{ "Column": "Name", "Type": "String", "Size": "200" },
+					{ "Column": "Description", "Type": "String", "Size": "Default" },
+					{ "Column": "SourceBeaconName", "Type": "String", "Size": "200" },
+					{ "Column": "SourceConnectionHash", "Type": "String", "Size": "200" },
+					{ "Column": "SourceEntity", "Type": "String", "Size": "200" },
+					{ "Column": "TargetBeaconName", "Type": "String", "Size": "200" },
+					{ "Column": "TargetConnectionHash", "Type": "String", "Size": "200" },
+					{ "Column": "TargetEntity", "Type": "String", "Size": "200" },
+					{ "Column": "MappingConfiguration", "Type": "String", "Size": "Default" },
+					{ "Column": "FlowDiagramState", "Type": "String", "Size": "Default" }
+				],
+				"DefaultObject": {
+					"IDMappingConfig": 0,
+					"GUIDMappingConfig": "0x0000000000000000",
+					"CreateDate": null,
+					"CreatingIDUser": 0,
+					"UpdateDate": null,
+					"UpdatingIDUser": 0,
+					"Deleted": false,
+					"DeleteDate": null,
+					"DeletingIDUser": 0,
+					"Name": "",
+					"Description": "",
+					"SourceBeaconName": "",
+					"SourceConnectionHash": "",
+					"SourceEntity": "",
+					"TargetBeaconName": "",
+					"TargetConnectionHash": "",
+					"TargetEntity": "",
+					"MappingConfiguration": "{}",
+					"FlowDiagramState": "{}"
+				}
+			}
+		},
+		"OperationTemplate": {
+			"TableName": "OperationTemplate",
+			"Domain": "Default",
+			"Columns": [
+				{ "Column": "IDOperationTemplate", "DataType": "ID" },
+				{ "Column": "GUIDOperationTemplate", "DataType": "GUID", "Size": "36" },
+				{ "Column": "CreateDate", "DataType": "DateTime" },
+				{ "Column": "CreatingIDUser", "DataType": "Numeric", "Size": "int" },
+				{ "Column": "UpdateDate", "DataType": "DateTime" },
+				{ "Column": "UpdatingIDUser", "DataType": "Numeric", "Size": "int" },
+				{ "Column": "Deleted", "DataType": "Boolean" },
+				{ "Column": "DeleteDate", "DataType": "DateTime" },
+				{ "Column": "DeletingIDUser", "DataType": "Numeric", "Size": "int" },
+				{ "Column": "Name", "DataType": "String", "Size": "200" },
+				{ "Column": "Description", "DataType": "Text" },
+				{ "Column": "OperationHash", "DataType": "String", "Size": "200" },
+				{ "Column": "OperationJSON", "DataType": "Text" }
+			],
+			"Description": "Stores saved Ultravisor operation graph templates.",
+			"MeadowSchema": {
+				"Scope": "OperationTemplate",
+				"DefaultIdentifier": "IDOperationTemplate",
+				"Domain": "Default",
+				"Schema": [
+					{ "Column": "IDOperationTemplate", "Type": "AutoIdentity", "Size": "Default" },
+					{ "Column": "GUIDOperationTemplate", "Type": "AutoGUID", "Size": "36" },
+					{ "Column": "CreateDate", "Type": "CreateDate", "Size": "Default" },
+					{ "Column": "CreatingIDUser", "Type": "CreateIDUser", "Size": "int" },
+					{ "Column": "UpdateDate", "Type": "UpdateDate", "Size": "Default" },
+					{ "Column": "UpdatingIDUser", "Type": "UpdateIDUser", "Size": "int" },
+					{ "Column": "Deleted", "Type": "Deleted", "Size": "Default" },
+					{ "Column": "DeleteDate", "Type": "DeleteDate", "Size": "Default" },
+					{ "Column": "DeletingIDUser", "Type": "DeleteIDUser", "Size": "int" },
+					{ "Column": "Name", "Type": "String", "Size": "200" },
+					{ "Column": "Description", "Type": "String", "Size": "Default" },
+					{ "Column": "OperationHash", "Type": "String", "Size": "200" },
+					{ "Column": "OperationJSON", "Type": "String", "Size": "Default" }
+				],
+				"DefaultObject": {
+					"IDOperationTemplate": 0,
+					"GUIDOperationTemplate": "0x0000000000000000",
+					"CreateDate": null,
+					"CreatingIDUser": 0,
+					"UpdateDate": null,
+					"UpdatingIDUser": 0,
+					"Deleted": false,
+					"DeleteDate": null,
+					"DeletingIDUser": 0,
+					"Name": "",
+					"Description": "",
+					"OperationHash": "",
+					"OperationJSON": "{}"
+				}
+			}
+		}
+	}
+}
