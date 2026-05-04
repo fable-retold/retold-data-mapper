@@ -47,6 +47,3320 @@
     return r;
   }()({
     1: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — Dashboard Shell Pict Application
+       *
+       * One-view application that mounts pict-section-dashboard in `manage`
+       * mode. Used by dashboards.html. The same section is also available
+       * for embedding into other Pict applications (set Mode='render-only'
+       * to hide the CRUD chrome and just render dashboards in place).
+       */
+      const libPictApplication = require('pict-application');
+      const libSectionDashboard = require('./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js');
+      const libSectionModal = require('pict-section-modal');
+      class DashboardShellApplication extends libPictApplication {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+          this.serviceType = 'DashboardShellApplication';
+
+          // Modal/toast section — pict-section-dashboard uses it for delete
+          // confirmations and success toasts. Registering under the name
+          // 'Modal' matches the lookup pattern in the section
+          // (this.pict.views.Modal).
+          this.pict.addView('Modal', {}, libSectionModal);
+          this.pict.addView('Dashboards', Object.assign({}, libSectionDashboard.default_configuration, {
+            ContentDestinationAddress: '#dashboard-section',
+            APIBaseUrl: '/mapper',
+            Mode: 'manage',
+            ShowToolbar: true,
+            AutoRender: true
+          }), libSectionDashboard);
+        }
+        onAfterInitializeAsync(fCallback) {
+          // First render paints the section into #dashboard-section. The
+          // section's own onAfterRender takes over from there.
+          if (this.pict.views && this.pict.views.Dashboards) {
+            this.pict.views.Dashboards.render();
+          }
+          return super.onAfterInitializeAsync(fCallback);
+        }
+      }
+      module.exports = DashboardShellApplication;
+    }, {
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 8,
+      "pict-application": 22,
+      "pict-section-modal": 30
+    }],
+    2: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — Pict Application
+       *
+       * Shell for the visual mapping editor. Registers the MapperAPI provider
+       * and all views, seeds AppData, and renders the Layout view.
+       */
+      const libPictApplication = require('pict-application');
+      const libMapperAPIProvider = require('./providers/Pict-Provider-MapperAPI.js');
+      const libViewLayout = require('./views/PictView-Mapper-Layout.js');
+      const libViewBeaconBrowser = require('./views/PictView-Mapper-BeaconBrowser.js');
+      const libViewFieldMapper = require('./views/PictView-Mapper-FieldMapper.js');
+      const libViewMappingList = require('./views/PictView-Mapper-MappingList.js');
+      const libViewJSONEditor = require('./views/PictView-Mapper-JSONEditor.js');
+      class DataMapperApplication extends libPictApplication {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+          this.serviceType = 'DataMapperApplication';
+          this.pict.addProvider('MapperAPI', libMapperAPIProvider.default_configuration, libMapperAPIProvider);
+          this.pict.addView('Mapper-Layout', libViewLayout.default_configuration, libViewLayout);
+          this.pict.addView('Mapper-BeaconBrowser', libViewBeaconBrowser.default_configuration, libViewBeaconBrowser);
+          this.pict.addView('Mapper-FieldMapper', libViewFieldMapper.default_configuration, libViewFieldMapper);
+          this.pict.addView('Mapper-MappingList', libViewMappingList.default_configuration, libViewMappingList);
+          this.pict.addView('Mapper-JSONEditor', libViewJSONEditor.default_configuration, libViewJSONEditor);
+        }
+        onAfterInitializeAsync(fCallback) {
+          if (!this.pict.AppData) this.pict.AppData = {};
+          this.pict.AppData.Mapper = {
+            UltravisorURL: '',
+            UltravisorStatus: 'Disconnected',
+            UltravisorStatusLabel: 'Disconnected',
+            UltravisorBadgeClass: 'badge-neutral',
+            Beacons: [],
+            SourceBeacons: [],
+            TargetBeacons: [],
+            SourceBeaconName: '',
+            SourceConnections: [],
+            SourceConnectionID: null,
+            SourceConnectionHash: '',
+            SourceEntities: [],
+            SourceEntity: '',
+            SourceFields: [],
+            TargetBeaconName: '',
+            TargetConnections: [],
+            TargetConnectionID: null,
+            TargetConnectionHash: '',
+            TargetEntities: [],
+            TargetEntity: '',
+            TargetFields: [],
+            SelectedSourceField: '',
+            Mappings: [],
+            SavedMappings: [],
+            ActivePanel: 'mapper',
+            // mapper | mappings | json
+
+            StatusMessage: 'Ready',
+            JSONText: ''
+          };
+          if (typeof window !== 'undefined') window.DataMapperApp = this;
+          this.pict.views['Mapper-Layout'].render();
+          let tmpProvider = this.pict.providers.MapperAPI;
+          if (tmpProvider) {
+            tmpProvider.loadUltravisorStatus(() => {
+              tmpProvider.loadBeacons();
+              tmpProvider.loadSavedMappings();
+            });
+          }
+          return super.onAfterInitializeAsync(fCallback);
+        }
+        setActivePanel(pPanelName) {
+          if (this.pict.views['Mapper-Layout'] && typeof this.pict.views['Mapper-Layout'].setActivePanel === 'function') {
+            this.pict.views['Mapper-Layout'].setActivePanel(pPanelName);
+          }
+        }
+      }
+      module.exports = DataMapperApplication;
+      module.exports.default_configuration = {};
+    }, {
+      "./providers/Pict-Provider-MapperAPI.js": 5,
+      "./views/PictView-Mapper-BeaconBrowser.js": 14,
+      "./views/PictView-Mapper-FieldMapper.js": 15,
+      "./views/PictView-Mapper-JSONEditor.js": 16,
+      "./views/PictView-Mapper-Layout.js": 17,
+      "./views/PictView-Mapper-MappingList.js": 18,
+      "pict-application": 22
+    }],
+    3: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — Mapping Shell Pict Application
+       *
+       * One-view application that mounts pict-section-mapping in `manage`
+       * mode. Used by mappings.html. The visual field-mapping editor lives
+       * separately at index.html (DataMapperApplication); this shell is the
+       * lightweight CRUD-and-Run surface.
+       */
+      const libPictApplication = require('pict-application');
+      const libSectionMapping = require('./vendor/pict-section-mapping/source/Pict-Section-Mapping.js');
+      const libSectionModal = require('pict-section-modal');
+      class MappingShellApplication extends libPictApplication {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+          this.serviceType = 'MappingShellApplication';
+          this.pict.addView('Modal', {}, libSectionModal);
+          this.pict.addView('Mappings', Object.assign({}, libSectionMapping.default_configuration, {
+            ContentDestinationAddress: '#mapping-section',
+            APIBaseUrl: '/mapper',
+            Mode: 'manage',
+            ShowToolbar: true,
+            AutoRender: true
+          }), libSectionMapping);
+        }
+        onAfterInitializeAsync(fCallback) {
+          if (this.pict.views && this.pict.views.Mappings) {
+            this.pict.views.Mappings.render();
+          }
+          return super.onAfterInitializeAsync(fCallback);
+        }
+      }
+      module.exports = MappingShellApplication;
+    }, {
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 12,
+      "pict-application": 22,
+      "pict-section-modal": 30
+    }],
+    4: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — Browser Bundle Entry
+       *
+       * Quackage (browserify) processes this file to produce retold-data-mapper.js.
+       */
+      let libPictApplication = require('pict-application');
+      let libPictView = require('pict-view');
+      let libDataMapperApplication = require('./Pict-Application-DataMapper.js');
+      let libMapperAPIProvider = require('./providers/Pict-Provider-MapperAPI.js');
+      let libViewLayout = require('./views/PictView-Mapper-Layout.js');
+      let libViewBeaconBrowser = require('./views/PictView-Mapper-BeaconBrowser.js');
+      let libViewFieldMapper = require('./views/PictView-Mapper-FieldMapper.js');
+      let libViewMappingList = require('./views/PictView-Mapper-MappingList.js');
+      let libViewJSONEditor = require('./views/PictView-Mapper-JSONEditor.js');
+
+      // Embeddable Pict-section views — bundled here so standalone shell
+      // pages (dashboards.html, mappings.html) can mount them, and so any
+      // "ENHANCE another product" host that consumes this bundle gets the
+      // sections via the global names below.
+      let libSectionDashboard = require('./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js');
+      let libSectionMapping = require('./vendor/pict-section-mapping/source/Pict-Section-Mapping.js');
+      let libDashboardShellApp = require('./Pict-Application-DashboardShell.js');
+      let libMappingShellApp = require('./Pict-Application-MappingShell.js');
+      window.DataMapperApplication = libDataMapperApplication;
+      window.PictSectionDashboard = libSectionDashboard;
+      window.PictSectionMapping = libSectionMapping;
+      window.DashboardShellApplication = libDashboardShellApp;
+      window.MappingShellApplication = libMappingShellApp;
+    }, {
+      "./Pict-Application-DashboardShell.js": 1,
+      "./Pict-Application-DataMapper.js": 2,
+      "./Pict-Application-MappingShell.js": 3,
+      "./providers/Pict-Provider-MapperAPI.js": 5,
+      "./vendor/pict-section-dashboard/source/Pict-Section-Dashboard.js": 8,
+      "./vendor/pict-section-mapping/source/Pict-Section-Mapping.js": 12,
+      "./views/PictView-Mapper-BeaconBrowser.js": 14,
+      "./views/PictView-Mapper-FieldMapper.js": 15,
+      "./views/PictView-Mapper-JSONEditor.js": 16,
+      "./views/PictView-Mapper-Layout.js": 17,
+      "./views/PictView-Mapper-MappingList.js": 18,
+      "pict-application": 22,
+      "pict-view": 32
+    }],
+    5: [function (require, module, exports) {
+      /**
+       * Retold DataMapper — API Provider
+       *
+       * Calls the DataMapper's own REST API at /mapper/* and stores results in
+       * AppData. The server-side dispatches foreign-beacon calls through the
+       * Ultravisor mesh, so this provider never has to know about mesh routing.
+       */
+      const libPictProvider = require('pict-view');
+      class MapperAPIProvider extends libPictProvider {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+          this.serviceType = 'MapperAPIProvider';
+        }
+        _apiCall(pMethod, pPath, pBody, fCallback) {
+          let tmpOptions = {
+            method: pMethod,
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          };
+          if (pBody && pMethod !== 'GET') {
+            tmpOptions.body = JSON.stringify(pBody);
+          }
+          fetch(pPath, tmpOptions).then(pResponse => pResponse.json()).then(pData => {
+            if (fCallback) fCallback(null, pData);
+          }).catch(pError => {
+            if (fCallback) fCallback(pError);
+          });
+        }
+
+        // ── Ultravisor ──────────────────────────────────────────
+
+        loadUltravisorStatus(fCallback) {
+          this._apiCall('GET', '/mapper/ultravisor/status', null, (pError, pData) => {
+            if (!pError && pData) {
+              this._applyUltravisorStatus(pData);
+            }
+            this._renderLayout();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        connectUltravisor(pURL, pBeaconName, fCallback) {
+          this._apiCall('POST', '/mapper/ultravisor/connect', {
+            URL: pURL,
+            BeaconName: pBeaconName || 'retold-data-mapper'
+          }, (pError, pData) => {
+            if (!pError && pData) {
+              this._applyUltravisorStatus(pData);
+            }
+            this._renderLayout();
+            if (!pError && pData && pData.Success) {
+              this.loadBeacons();
+            }
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        disconnectUltravisor(fCallback) {
+          this._apiCall('POST', '/mapper/ultravisor/disconnect', null, (pError, pData) => {
+            this.pict.AppData.Mapper.UltravisorStatus = 'Disconnected';
+            this.pict.AppData.Mapper.UltravisorStatusLabel = 'Disconnected';
+            this.pict.AppData.Mapper.UltravisorBadgeClass = 'badge-neutral';
+            this.pict.AppData.Mapper.Beacons = [];
+            this.pict.AppData.Mapper.SourceBeacons = [];
+            this.pict.AppData.Mapper.TargetBeacons = [];
+            this._renderLayout();
+            this._renderBeaconBrowser();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        _applyUltravisorStatus(pData) {
+          let tmpStatus = pData.Status || (pData.Connected ? 'Connected' : 'Disconnected');
+          let tmpLabel = tmpStatus;
+          let tmpBadge = 'badge-neutral';
+          if (pData.Connected) {
+            tmpBadge = 'badge-success';
+          } else if (tmpStatus === 'Failed') {
+            tmpBadge = 'badge-error';
+          }
+          this.pict.AppData.Mapper.UltravisorStatus = tmpStatus;
+          this.pict.AppData.Mapper.UltravisorStatusLabel = tmpLabel;
+          this.pict.AppData.Mapper.UltravisorBadgeClass = tmpBadge;
+          this.pict.AppData.Mapper.UltravisorURL = pData.URL || this.pict.AppData.Mapper.UltravisorURL;
+        }
+
+        // ── Beacons ─────────────────────────────────────────────
+
+        loadBeacons(fCallback) {
+          this._apiCall('GET', '/mapper/beacons', null, (pError, pData) => {
+            if (!pError && pData) {
+              this.pict.AppData.Mapper.Beacons = pData.Beacons || [];
+              this._recomputeBeaconOptions();
+            }
+            this._renderBeaconBrowser();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        loadSourceConnections(pBeaconName, fCallback) {
+          this.pict.AppData.Mapper.SourceBeaconName = pBeaconName;
+          this.pict.AppData.Mapper.SourceConnections = [];
+          this.pict.AppData.Mapper.SourceConnectionID = null;
+          this.pict.AppData.Mapper.SourceConnectionHash = '';
+          this.pict.AppData.Mapper.SourceEntities = [];
+          this.pict.AppData.Mapper.SourceEntity = '';
+          this.pict.AppData.Mapper.SourceFields = [];
+          if (!pBeaconName) {
+            this._recomputeBeaconOptions();
+            this._renderBeaconBrowser();
+            this._renderFieldMapper();
+            if (fCallback) fCallback();
+            return;
+          }
+          this._apiCall('GET', `/mapper/beacon/${encodeURIComponent(pBeaconName)}/connections`, null, (pError, pData) => {
+            if (!pError && pData) {
+              this.pict.AppData.Mapper.SourceConnections = pData.Connections || [];
+            }
+            this._recomputeBeaconOptions();
+            this._renderBeaconBrowser();
+            this._renderFieldMapper();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        loadTargetConnections(pBeaconName, fCallback) {
+          this.pict.AppData.Mapper.TargetBeaconName = pBeaconName;
+          this.pict.AppData.Mapper.TargetConnections = [];
+          this.pict.AppData.Mapper.TargetConnectionID = null;
+          this.pict.AppData.Mapper.TargetConnectionHash = '';
+          this.pict.AppData.Mapper.TargetEntities = [];
+          this.pict.AppData.Mapper.TargetEntity = '';
+          this.pict.AppData.Mapper.TargetFields = [];
+          if (!pBeaconName) {
+            this._recomputeBeaconOptions();
+            this._renderBeaconBrowser();
+            this._renderFieldMapper();
+            if (fCallback) fCallback();
+            return;
+          }
+          this._apiCall('GET', `/mapper/beacon/${encodeURIComponent(pBeaconName)}/connections`, null, (pError, pData) => {
+            if (!pError && pData) {
+              this.pict.AppData.Mapper.TargetConnections = pData.Connections || [];
+            }
+            this._recomputeBeaconOptions();
+            this._renderBeaconBrowser();
+            this._renderFieldMapper();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        introspectSource(pIDBeaconConnection, fCallback) {
+          let tmpBeaconName = this.pict.AppData.Mapper.SourceBeaconName;
+          if (!tmpBeaconName || !pIDBeaconConnection) {
+            if (fCallback) fCallback(new Error('beacon + id required'));
+            return;
+          }
+          this.pict.AppData.Mapper.SourceConnectionID = pIDBeaconConnection;
+          let tmpConn = this._findConnection(this.pict.AppData.Mapper.SourceConnections, pIDBeaconConnection);
+          this.pict.AppData.Mapper.SourceConnectionHash = this._slugify(tmpConn ? tmpConn.Name : '');
+          this._apiCall('POST', `/mapper/beacon/${encodeURIComponent(tmpBeaconName)}/introspect`, {
+            IDBeaconConnection: pIDBeaconConnection
+          }, (pError, pData) => {
+            if (!pError && pData) {
+              this.pict.AppData.Mapper.SourceEntities = pData.Tables || [];
+              if (pData.ConnectionHash) {
+                this.pict.AppData.Mapper.SourceConnectionHash = pData.ConnectionHash;
+              }
+            }
+            this._recomputeBeaconOptions();
+            this._renderBeaconBrowser();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        introspectTarget(pIDBeaconConnection, fCallback) {
+          let tmpBeaconName = this.pict.AppData.Mapper.TargetBeaconName;
+          if (!tmpBeaconName || !pIDBeaconConnection) {
+            if (fCallback) fCallback(new Error('beacon + id required'));
+            return;
+          }
+          this.pict.AppData.Mapper.TargetConnectionID = pIDBeaconConnection;
+          let tmpConn = this._findConnection(this.pict.AppData.Mapper.TargetConnections, pIDBeaconConnection);
+          this.pict.AppData.Mapper.TargetConnectionHash = this._slugify(tmpConn ? tmpConn.Name : '');
+          this._apiCall('POST', `/mapper/beacon/${encodeURIComponent(tmpBeaconName)}/introspect`, {
+            IDBeaconConnection: pIDBeaconConnection
+          }, (pError, pData) => {
+            if (!pError && pData) {
+              this.pict.AppData.Mapper.TargetEntities = pData.Tables || [];
+              if (pData.ConnectionHash) {
+                this.pict.AppData.Mapper.TargetConnectionHash = pData.ConnectionHash;
+              }
+            }
+            this._recomputeBeaconOptions();
+            this._renderBeaconBrowser();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        setSourceEntity(pEntityName) {
+          this.pict.AppData.Mapper.SourceEntity = pEntityName;
+          let tmpEntity = this._findEntity(this.pict.AppData.Mapper.SourceEntities, pEntityName);
+          this.pict.AppData.Mapper.SourceFields = this._extractFields(tmpEntity);
+          this._recomputeBeaconOptions();
+          this._renderBeaconBrowser();
+          this._renderFieldMapper();
+        }
+        setTargetEntity(pEntityName) {
+          this.pict.AppData.Mapper.TargetEntity = pEntityName;
+          let tmpEntity = this._findEntity(this.pict.AppData.Mapper.TargetEntities, pEntityName);
+          this.pict.AppData.Mapper.TargetFields = this._extractFields(tmpEntity);
+          this._recomputeBeaconOptions();
+          this._renderBeaconBrowser();
+          this._renderFieldMapper();
+        }
+
+        // ── Mappings ────────────────────────────────────────────
+
+        selectSourceField(pFieldName) {
+          let tmpCurrent = this.pict.AppData.Mapper.SelectedSourceField;
+          this.pict.AppData.Mapper.SelectedSourceField = tmpCurrent === pFieldName ? '' : pFieldName;
+          this._renderFieldMapper();
+        }
+        addMapping(pSource, pTarget) {
+          if (!pSource || !pTarget) {
+            return;
+          }
+          let tmpMappings = this.pict.AppData.Mapper.Mappings || [];
+          tmpMappings = tmpMappings.filter(pM => pM.Target !== pTarget);
+          tmpMappings.push({
+            Source: pSource,
+            Target: pTarget
+          });
+          this.pict.AppData.Mapper.Mappings = tmpMappings;
+          this.pict.AppData.Mapper.SelectedSourceField = '';
+          this._regenerateJSON();
+          this._renderFieldMapper();
+        }
+        removeMapping(pIndex) {
+          let tmpMappings = this.pict.AppData.Mapper.Mappings || [];
+          tmpMappings.splice(pIndex, 1);
+          this.pict.AppData.Mapper.Mappings = tmpMappings;
+          this._regenerateJSON();
+          this._renderFieldMapper();
+        }
+        clearMappings() {
+          this.pict.AppData.Mapper.Mappings = [];
+          this.pict.AppData.Mapper.SelectedSourceField = '';
+          this._regenerateJSON();
+          this._renderFieldMapper();
+        }
+
+        // ── Saved MappingConfigs (CRUD against our own SQLite) ──
+
+        loadSavedMappings(fCallback) {
+          this._apiCall('GET', '/mapper/mappings', null, (pError, pData) => {
+            if (!pError && pData) {
+              this.pict.AppData.Mapper.SavedMappings = pData.Mappings || [];
+            }
+            this._renderMappingList();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        saveMapping(fCallback) {
+          let tmpState = this.pict.AppData.Mapper;
+          let tmpConfig = this._buildMappingConfiguration();
+          let tmpBody = {
+            Name: tmpState.TargetEntity ? `${tmpState.SourceEntity || 'source'} → ${tmpState.TargetEntity}` : 'Untitled Mapping',
+            Description: '',
+            SourceBeaconName: tmpState.SourceBeaconName,
+            SourceConnectionHash: tmpState.SourceConnectionHash,
+            SourceEntity: tmpState.SourceEntity,
+            TargetBeaconName: tmpState.TargetBeaconName,
+            TargetConnectionHash: tmpState.TargetConnectionHash,
+            TargetEntity: tmpState.TargetEntity,
+            MappingConfiguration: tmpConfig,
+            FlowDiagramState: {}
+          };
+          this._apiCall('POST', '/mapper/mappings', tmpBody, (pError, pData) => {
+            if (!pError && pData && pData.Success) {
+              this.pict.AppData.Mapper.StatusMessage = 'Mapping saved.';
+              this.loadSavedMappings();
+            } else {
+              this.pict.AppData.Mapper.StatusMessage = 'Save failed.';
+            }
+            this._renderLayout();
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        deleteSavedMapping(pID, fCallback) {
+          this._apiCall('DELETE', `/mapper/mapping/${pID}`, null, (pError, pData) => {
+            if (!pError) {
+              this.loadSavedMappings();
+            }
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        loadSavedMapping(pID, fCallback) {
+          this._apiCall('GET', `/mapper/mapping/${pID}`, null, (pError, pData) => {
+            if (!pError && pData && pData.Mapping) {
+              this._applySavedMapping(pData.Mapping);
+            }
+            if (fCallback) fCallback(pError, pData);
+          });
+        }
+        _applySavedMapping(pRecord) {
+          let tmpState = this.pict.AppData.Mapper;
+          tmpState.SourceBeaconName = pRecord.SourceBeaconName || '';
+          tmpState.SourceConnectionHash = pRecord.SourceConnectionHash || '';
+          tmpState.SourceEntity = pRecord.SourceEntity || '';
+          tmpState.TargetBeaconName = pRecord.TargetBeaconName || '';
+          tmpState.TargetConnectionHash = pRecord.TargetConnectionHash || '';
+          tmpState.TargetEntity = pRecord.TargetEntity || '';
+          let tmpConfig = {};
+          try {
+            tmpConfig = JSON.parse(pRecord.MappingConfiguration || '{}');
+          } catch (e) {/* ignore */}
+          tmpState.Mappings = this._mappingsFromConfig(tmpConfig);
+          tmpState.JSONText = JSON.stringify(tmpConfig, null, '\t');
+          tmpState.StatusMessage = `Loaded "${pRecord.Name}".`;
+          tmpState.ActivePanel = 'mapper';
+
+          // If source/target fields aren't loaded, derive placeholders from mappings
+          if (tmpState.SourceFields.length === 0) {
+            let tmpSet = {};
+            tmpState.Mappings.forEach(pM => {
+              if (pM.Source) tmpSet[pM.Source] = true;
+            });
+            tmpState.SourceFields = Object.keys(tmpSet).map(pN => ({
+              Name: pN,
+              Type: ''
+            }));
+          }
+          if (tmpState.TargetFields.length === 0) {
+            let tmpSet = {};
+            tmpState.Mappings.forEach(pM => {
+              if (pM.Target) tmpSet[pM.Target] = true;
+            });
+            tmpState.TargetFields = Object.keys(tmpSet).map(pN => ({
+              Name: pN,
+              Type: ''
+            }));
+          }
+          this._recomputeBeaconOptions();
+          this._renderLayout();
+          this._renderBeaconBrowser();
+          this._renderFieldMapper();
+          this._renderJSONEditor();
+        }
+
+        // ── JSON editor sync ────────────────────────────────────
+
+        applyJSONText(pText) {
+          let tmpParsed;
+          try {
+            tmpParsed = JSON.parse(pText);
+          } catch (e) {
+            this.pict.AppData.Mapper.StatusMessage = `Invalid JSON: ${e.message}`;
+            this._renderLayout();
+            return false;
+          }
+          if (!tmpParsed || !tmpParsed.Mappings) {
+            this.pict.AppData.Mapper.StatusMessage = 'JSON must contain a "Mappings" object.';
+            this._renderLayout();
+            return false;
+          }
+          this.pict.AppData.Mapper.JSONText = JSON.stringify(tmpParsed, null, '\t');
+          this.pict.AppData.Mapper.Mappings = this._mappingsFromConfig(tmpParsed);
+          if (tmpParsed.Entity) {
+            this.pict.AppData.Mapper.TargetEntity = tmpParsed.Entity;
+          }
+          if (tmpParsed._meta) {
+            if (tmpParsed._meta.SourceBeacon) this.pict.AppData.Mapper.SourceBeaconName = tmpParsed._meta.SourceBeacon;
+            if (tmpParsed._meta.SourceConnectionHash) this.pict.AppData.Mapper.SourceConnectionHash = tmpParsed._meta.SourceConnectionHash;
+            if (tmpParsed._meta.TargetBeacon) this.pict.AppData.Mapper.TargetBeaconName = tmpParsed._meta.TargetBeacon;
+            if (tmpParsed._meta.TargetConnectionHash) this.pict.AppData.Mapper.TargetConnectionHash = tmpParsed._meta.TargetConnectionHash;
+          }
+          this.pict.AppData.Mapper.StatusMessage = `Imported ${this.pict.AppData.Mapper.Mappings.length} mappings.`;
+          this._renderLayout();
+          this._renderBeaconBrowser();
+          this._renderFieldMapper();
+          return true;
+        }
+
+        // ── Helpers ─────────────────────────────────────────────
+
+        _buildMappingConfiguration() {
+          let tmpState = this.pict.AppData.Mapper;
+          let tmpMappings = {};
+          (tmpState.Mappings || []).forEach(pM => {
+            tmpMappings[pM.Target] = '{~D:Record.' + pM.Source + '~}';
+          });
+          let tmpEntity = tmpState.TargetEntity || 'TargetEntity';
+          return {
+            Entity: tmpEntity,
+            GUIDTemplate: '',
+            GUIDName: 'GUID' + tmpEntity,
+            Mappings: tmpMappings,
+            Solvers: [],
+            _meta: {
+              SourceBeacon: tmpState.SourceBeaconName,
+              SourceConnectionHash: tmpState.SourceConnectionHash,
+              SourceEntity: tmpState.SourceEntity,
+              TargetBeacon: tmpState.TargetBeaconName,
+              TargetConnectionHash: tmpState.TargetConnectionHash
+            }
+          };
+        }
+        _mappingsFromConfig(pConfig) {
+          let tmpMappings = [];
+          let tmpSource = pConfig && pConfig.Mappings ? pConfig.Mappings : {};
+          let tmpKeys = Object.keys(tmpSource);
+          for (let i = 0; i < tmpKeys.length; i++) {
+            let tmpTarget = tmpKeys[i];
+            let tmpExpr = tmpSource[tmpTarget];
+            let tmpMatch = typeof tmpExpr === 'string' ? tmpExpr.match(/^\{~D:Record\.(\w+)~\}$/) : null;
+            tmpMappings.push({
+              Source: tmpMatch ? tmpMatch[1] : String(tmpExpr),
+              Target: tmpTarget
+            });
+          }
+          return tmpMappings;
+        }
+        _regenerateJSON() {
+          this.pict.AppData.Mapper.JSONText = JSON.stringify(this._buildMappingConfiguration(), null, '\t');
+        }
+        _slugify(pValue) {
+          return String(pValue || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        }
+        _findConnection(pConnections, pID) {
+          let tmpList = pConnections || [];
+          for (let i = 0; i < tmpList.length; i++) {
+            if (String(tmpList[i].IDBeaconConnection) === String(pID)) return tmpList[i];
+          }
+          return null;
+        }
+        _findEntity(pEntities, pName) {
+          let tmpList = pEntities || [];
+          for (let i = 0; i < tmpList.length; i++) {
+            if (tmpList[i].TableName === pName) return tmpList[i];
+          }
+          return null;
+        }
+        _extractFields(pEntity) {
+          if (!pEntity) return [];
+          let tmpCols = pEntity.Columns || [];
+          let tmpFields = [];
+          for (let i = 0; i < tmpCols.length; i++) {
+            tmpFields.push({
+              Name: tmpCols[i].Name || tmpCols[i].Column,
+              Type: tmpCols[i].NativeType || tmpCols[i].MeadowType || ''
+            });
+          }
+          return tmpFields;
+        }
+        _recomputeBeaconOptions() {
+          let tmpState = this.pict.AppData.Mapper;
+          let tmpBeacons = tmpState.Beacons || [];
+          tmpState.SourceBeacons = tmpBeacons.map(pB => ({
+            Name: pB.Name,
+            BeaconID: pB.BeaconID,
+            SelectedAttr: pB.Name === tmpState.SourceBeaconName ? 'selected' : ''
+          }));
+          tmpState.TargetBeacons = tmpBeacons.map(pB => ({
+            Name: pB.Name,
+            BeaconID: pB.BeaconID,
+            SelectedAttr: pB.Name === tmpState.TargetBeaconName ? 'selected' : ''
+          }));
+          tmpState.SourceConnectionsForTemplate = (tmpState.SourceConnections || []).map(pC => ({
+            IDBeaconConnection: pC.IDBeaconConnection,
+            Name: pC.Name,
+            Type: pC.Type,
+            SelectedAttr: String(pC.IDBeaconConnection) === String(tmpState.SourceConnectionID) ? 'selected' : ''
+          }));
+          tmpState.TargetConnectionsForTemplate = (tmpState.TargetConnections || []).map(pC => ({
+            IDBeaconConnection: pC.IDBeaconConnection,
+            Name: pC.Name,
+            Type: pC.Type,
+            SelectedAttr: String(pC.IDBeaconConnection) === String(tmpState.TargetConnectionID) ? 'selected' : ''
+          }));
+          tmpState.SourceEntitiesForTemplate = (tmpState.SourceEntities || []).map(pE => ({
+            TableName: pE.TableName,
+            ColumnCount: (pE.Columns || []).length,
+            SelectedAttr: pE.TableName === tmpState.SourceEntity ? 'selected' : ''
+          }));
+          tmpState.TargetEntitiesForTemplate = (tmpState.TargetEntities || []).map(pE => ({
+            TableName: pE.TableName,
+            ColumnCount: (pE.Columns || []).length,
+            SelectedAttr: pE.TableName === tmpState.TargetEntity ? 'selected' : ''
+          }));
+        }
+        _renderLayout() {
+          if (this.pict.views['Mapper-Layout']) this.pict.views['Mapper-Layout'].render();
+        }
+        _renderBeaconBrowser() {
+          if (this.pict.views['Mapper-BeaconBrowser']) this.pict.views['Mapper-BeaconBrowser'].render();
+        }
+        _renderFieldMapper() {
+          if (this.pict.views['Mapper-FieldMapper']) this.pict.views['Mapper-FieldMapper'].render();
+        }
+        _renderMappingList() {
+          if (this.pict.views['Mapper-MappingList']) this.pict.views['Mapper-MappingList'].render();
+        }
+        _renderJSONEditor() {
+          if (this.pict.views['Mapper-JSONEditor']) this.pict.views['Mapper-JSONEditor'].render();
+        }
+      }
+      module.exports = MapperAPIProvider;
+      module.exports.default_configuration = {
+        ProviderIdentifier: 'MapperAPI',
+        AutoInitialize: true,
+        AutoRender: false
+      };
+    }, {
+      "pict-view": 32
+    }],
+    6: [function (require, module, exports) {
+      /**
+       * Pict-Section-Dashboard CSS
+       *
+       * All class names are prefixed with `psd-` (Pict Section Dashboard) so
+       * the section can be mounted into any host application without bleeding
+       * into the host's stylesheet. Colors are conservative defaults; the
+       * host can override via CSS custom properties if it wants to re-theme.
+       */
+      'use strict';
+
+      module.exports = `
+.psd-root
+{
+	--psd-bg:           #0e1a2b;
+	--psd-bg-elev:      #0a1525;
+	--psd-bg-elev-2:    #0f172a;
+	--psd-border:       #1e293b;
+	--psd-border-soft:  #0f1c2f;
+	--psd-fg:           #f8fafc;
+	--psd-fg-soft:      #cbd5e1;
+	--psd-fg-mute:      #94a3b8;
+	--psd-fg-fade:      #64748b;
+	--psd-accent:       #2563eb;
+	--psd-accent-fg:    #ffffff;
+	--psd-danger:       #b91c1c;
+	--psd-danger-fg:    #fecaca;
+
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	background: var(--psd-bg);
+	color: var(--psd-fg);
+	min-height: 100%;
+}
+
+.psd-toolbar
+{
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 16px;
+	background: var(--psd-bg-elev);
+	border-bottom: 1px solid var(--psd-border);
+	flex-wrap: wrap;
+}
+.psd-toolbar h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.psd-toolbar .psd-toolbar-spacer { flex: 1; }
+.psd-toolbar label { color: var(--psd-fg-mute); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.psd-toolbar input, .psd-toolbar select
+{
+	background: var(--psd-bg-elev-2);
+	color: var(--psd-fg);
+	border: 1px solid var(--psd-border);
+	padding: 5px 9px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: inherit;
+}
+.psd-toolbar input[type=text].psd-scope-input
+{
+	width: 140px;
+	font-family: monospace;
+}
+.psd-toolbar .psd-scope-hint { color: var(--psd-fg-fade); font-size: 11px; font-style: italic; }
+.psd-btn
+{
+	background: var(--psd-bg-elev-2);
+	color: var(--psd-fg-soft);
+	border: 1px solid var(--psd-border);
+	padding: 5px 11px;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.psd-btn:hover { background: #1e293b; color: var(--psd-fg); }
+.psd-btn.psd-btn-primary { background: var(--psd-accent); border-color: var(--psd-accent); color: var(--psd-accent-fg); }
+.psd-btn.psd-btn-primary:hover { background: #1d4ed8; }
+.psd-btn.psd-btn-danger { background: transparent; color: var(--psd-danger-fg); border-color: var(--psd-danger); }
+.psd-btn.psd-btn-danger:hover { background: var(--psd-danger); color: var(--psd-accent-fg); }
+
+.psd-content { padding: 16px; max-width: 1400px; margin: 0 auto; }
+
+/* List view */
+.psd-list { display: flex; flex-direction: column; gap: 8px; }
+.psd-list-row
+{
+	display: grid;
+	grid-template-columns: 1.5fr 2fr 100px auto;
+	gap: 12px;
+	padding: 12px 14px;
+	background: var(--psd-bg-elev);
+	border: 1px solid var(--psd-border);
+	border-radius: 6px;
+	align-items: center;
+}
+.psd-list-row .psd-row-hash { font-family: monospace; font-size: 13px; color: var(--psd-fg); font-weight: 600; }
+.psd-list-row .psd-row-title { color: var(--psd-fg-soft); font-size: 13px; }
+.psd-list-row .psd-row-scope { font-family: monospace; font-size: 11px; color: var(--psd-fg-mute); }
+.psd-list-row .psd-row-scope.psd-scope-empty { color: var(--psd-fg-fade); font-style: italic; }
+.psd-list-row .psd-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+.psd-empty, .psd-error
+{
+	padding: 18px;
+	text-align: center;
+	color: var(--psd-fg-fade);
+	font-size: 13px;
+	border: 1px dashed var(--psd-border);
+	border-radius: 6px;
+	background: var(--psd-bg-elev);
+}
+.psd-error { color: #f87171; background: #2a1010; border-color: #2a1010; }
+
+/* Editor */
+.psd-editor { display: flex; flex-direction: column; gap: 14px; }
+.psd-editor-header { display: flex; gap: 12px; align-items: center; }
+.psd-editor-header h3 { margin: 0; font-size: 16px; }
+.psd-editor-form { display: grid; grid-template-columns: 140px 1fr; gap: 10px 14px; align-items: center; }
+.psd-editor-form label { color: var(--psd-fg-mute); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.psd-editor-form input[type=text]
+{
+	background: var(--psd-bg-elev-2);
+	color: var(--psd-fg);
+	border: 1px solid var(--psd-border);
+	padding: 6px 10px;
+	border-radius: 4px;
+	font-size: 13px;
+	font-family: inherit;
+}
+.psd-editor-form .psd-help { color: var(--psd-fg-fade); font-size: 11px; font-style: italic; }
+.psd-editor-form textarea
+{
+	background: var(--psd-bg-elev-2);
+	color: var(--psd-fg);
+	border: 1px solid var(--psd-border);
+	padding: 8px 10px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: monospace;
+	min-height: 280px;
+	resize: vertical;
+	width: 100%;
+	box-sizing: border-box;
+}
+.psd-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.psd-editor-error { color: #f87171; font-size: 12px; padding: 8px 12px; background: #2a1010; border-radius: 4px; }
+
+/* Renderer */
+.psd-render-title { font-size: 22px; margin: 0 0 4px 0; }
+.psd-render-meta { color: var(--psd-fg-mute); font-size: 12px; margin: 0 0 18px 0; }
+.psd-layout-column { display: flex; flex-direction: column; gap: 14px; }
+.psd-layout-row { display: flex; flex-direction: row; gap: 14px; flex-wrap: wrap; }
+.psd-layout-row > * { flex: 1; min-width: 320px; }
+.psd-panel
+{
+	background: var(--psd-bg-elev);
+	border: 1px solid var(--psd-border);
+	border-radius: 6px;
+	padding: 14px;
+}
+.psd-panel-title { font-size: 14px; font-weight: 600; margin: 0 0 10px 0; color: var(--psd-fg-soft); }
+.psd-panel-meta { font-size: 11px; color: var(--psd-fg-fade); margin-bottom: 6px; }
+table.psd-panel-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.psd-panel-table th
+{
+	text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--psd-border);
+	color: var(--psd-fg-mute); font-weight: 500; text-transform: uppercase; font-size: 11px;
+}
+table.psd-panel-table td { padding: 7px 9px; border-bottom: 1px solid var(--psd-border-soft); color: #e2e8f0; }
+table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
+.psd-pager { display: flex; gap: 8px; margin-top: 10px; align-items: center; font-size: 12px; }
+.psd-pager .psd-pager-label { color: var(--psd-fg-mute); }
+
+/* Section variants */
+.psd-mode-render-only .psd-toolbar { padding: 8px 14px; }
+.psd-mode-render-only .psd-list-row .psd-row-actions { display: none; }
+`;
+    }, {}],
+    7: [function (require, module, exports) {
+      /**
+       * Pict-Section-Dashboard default configuration.
+       *
+       * Host applications override these via the options object passed to
+       * pict.addView(...). Most useful overrides:
+       *
+       *   ContentDestinationAddress  CSS selector where the section mounts
+       *   APIBaseUrl                 prefix for /dashboards, /dashboard/:hash, etc.
+       *   Mode                       'manage' (default) or 'render-only'
+       *   InitialDashboardHash       open this dashboard immediately (else show list)
+       *   ShowToolbar                false to hide the section's own toolbar
+       *                              (use when the host wants to drive scope itself)
+       *   Scope                      pin to a specific scope, ignoring localStorage
+       */
+      'use strict';
+
+      module.exports = {
+        ViewIdentifier: 'Pict-Section-Dashboard',
+        DefaultRenderable: 'Pict-Section-Dashboard-Shell',
+        DefaultDestinationAddress: '#Pict-Section-Dashboard',
+        AutoRender: true,
+        APIBaseUrl: '/mapper',
+        Mode: 'manage',
+        InitialDashboardHash: null,
+        ShowToolbar: true,
+        Scope: null,
+        // null = read from localStorage; '' = global; '<value>' = pinned
+        ListPageSize: 25,
+        // default panel paging when not specified by Layout
+        ListCompactRows: 10 // default cap for list-compact panels
+      };
+    }, {}],
+    8: [function (require, module, exports) {
+      /**
+       * Pict-Section-Dashboard
+       *
+       * An embeddable Pict view that provides:
+       *   - a list of dashboards in the active scope (with new/edit/delete),
+       *   - a layout-driven dashboard renderer (paged list and compact list
+       *     panels, nested row/column containers), and
+       *   - a JSON-form editor for the dashboard record itself.
+       *
+       * Two modes:
+       *
+       *   `manage`       full CRUD UI; this is the default and is meant for the
+       *                  data-mapper "Dashboards" surface where dashboards ARE
+       *                  the product.
+       *
+       *   `render-only`  no CRUD; the section just lists and renders. Use this
+       *                  when embedding into another product where dashboards
+       *                  are an enhancement rather than the main thing.
+       *
+       * Mounting:
+       *
+       *   const libDashboard = require('pict-section-dashboard');
+       *   pict.addView(
+       *     'Dashboards',
+       *     {
+       *       ContentDestinationAddress: '#my-dashboard-mount',
+       *       APIBaseUrl: '/mapper',
+       *       Mode: 'manage'
+       *     },
+       *     libDashboard);
+       *
+       * The view paints its toolbar + content into the destination element
+       * via direct DOM manipulation (not Pict templates) because dashboard
+       * layouts are arbitrary nested JSON and don't fit the template-engine
+       * iteration model. State + lifecycle are still Pict-managed.
+       */
+      'use strict';
+
+      const libPictView = require('pict-view');
+      const libDefaultConf = require('./Pict-Section-Dashboard-DefaultConfiguration.js');
+      const libCSS = require('./Pict-Section-Dashboard-CSS.js');
+      const libAPIProvider = require('./providers/PictProvider-Dashboard-API.js');
+      class PictSectionDashboard extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          let tmpOptions = Object.assign({}, libDefaultConf, pOptions || {});
+          super(pFable, tmpOptions, pServiceHash);
+          this._API = new libAPIProvider({
+            APIBaseUrl: this.options.APIBaseUrl,
+            Scope: this.options.Scope
+          });
+
+          // Internal state (not exposed via AppData; this section is
+          // self-contained). Mode + selection drive what paints.
+          this._state = {
+            view: this.options.InitialDashboardHash ? 'render' : 'list',
+            dashboards: [],
+            currentHash: this.options.InitialDashboardHash || null,
+            currentCfg: null,
+            editing: null,
+            // record being edited (or null for new)
+            lastError: null
+          };
+
+          // Per-panel paging, keyed by panel-id.
+          this._panelState = {};
+
+          // CSS fragment: register once with the host's CSSMap so the host's
+          // style cascade picks it up. addCSS is idempotent on hash.
+          if (this.pict && this.pict.CSSMap && typeof this.pict.CSSMap.addCSS === 'function') {
+            this.pict.CSSMap.addCSS('Pict-Section-Dashboard-CSS', libCSS, 500);
+          }
+        }
+
+        // ── Public API (host can call these to drive the section) ──────────
+
+        /** Switch to render mode for a specific dashboard. */
+        openDashboard(pHash) {
+          this._state.currentHash = pHash;
+          this._state.view = 'render';
+          this.render();
+        }
+
+        /** Switch to list mode. */
+        openList() {
+          this._state.view = 'list';
+          this._state.currentCfg = null;
+          this.render();
+        }
+
+        /** Switch to editor mode. Pass null/undefined to create new. */
+        openEditor(pRecord) {
+          this._state.editing = pRecord || null;
+          this._state.view = 'edit';
+          this.render();
+        }
+
+        /** Refresh the dashboard list from the API and re-paint. */
+        refresh() {
+          this.render();
+        }
+
+        // ── Lifecycle ─────────────────────────────────────────────────────
+
+        onAfterRender(pRenderable, pAddress, pRecord, pContent) {
+          this.pict.CSSMap.injectCSS();
+          this._mount();
+          return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
+        }
+
+        // ── DOM mount ─────────────────────────────────────────────────────
+
+        _mount() {
+          let tmpDest = this._dest();
+          if (!tmpDest) return;
+
+          // Wipe + re-establish the section root
+          tmpDest.innerHTML = '';
+          tmpDest.classList.add('psd-root');
+          tmpDest.classList.add('psd-mode-' + this.options.Mode);
+          if (this.options.ShowToolbar) tmpDest.appendChild(this._buildToolbar());
+          let tmpContent = document.createElement('div');
+          tmpContent.className = 'psd-content';
+          tmpDest.appendChild(tmpContent);
+          if (this._state.view === 'list') this._mountList(tmpContent);else if (this._state.view === 'edit') this._mountEditor(tmpContent);else if (this._state.view === 'render') this._mountRender(tmpContent);
+        }
+        _dest() {
+          let tmpAddr = this.options.ContentDestinationAddress;
+          if (!tmpAddr || typeof document === 'undefined') return null;
+          return document.querySelector(tmpAddr);
+        }
+
+        // ── Toolbar ───────────────────────────────────────────────────────
+
+        _buildToolbar() {
+          let tmpBar = document.createElement('div');
+          tmpBar.className = 'psd-toolbar';
+          let tmpTitle = document.createElement('h2');
+          tmpTitle.textContent = 'Dashboards';
+          tmpBar.appendChild(tmpTitle);
+
+          // Back-to-list link, only shown when not on list
+          if (this._state.view !== 'list') {
+            let tmpBack = document.createElement('a');
+            tmpBack.className = 'psd-btn';
+            tmpBack.textContent = '← All dashboards';
+            tmpBack.href = 'javascript:void(0)';
+            tmpBack.onclick = () => this.openList();
+            tmpBar.appendChild(tmpBack);
+          }
+          let tmpSpacer = document.createElement('span');
+          tmpSpacer.className = 'psd-toolbar-spacer';
+          tmpBar.appendChild(tmpSpacer);
+
+          // Scope selector
+          let tmpScopeLabel = document.createElement('label');
+          tmpScopeLabel.textContent = 'scope';
+          let tmpScopeInput = document.createElement('input');
+          tmpScopeInput.type = 'text';
+          tmpScopeInput.className = 'psd-scope-input';
+          tmpScopeInput.placeholder = '(global)';
+          tmpScopeInput.spellcheck = false;
+          tmpScopeInput.value = this._API.getScope();
+          let tmpDebounce = null;
+          tmpScopeInput.oninput = () => {
+            clearTimeout(tmpDebounce);
+            tmpDebounce = setTimeout(() => {
+              this._API.setScope(tmpScopeInput.value.trim());
+              // Switch back to list — what the user is currently
+              // viewing might not exist in the new scope.
+              this._state.view = 'list';
+              this._state.currentHash = null;
+              this._state.currentCfg = null;
+              this.render();
+            }, 300);
+          };
+          tmpScopeLabel.appendChild(tmpScopeInput);
+          let tmpScopeHint = document.createElement('span');
+          tmpScopeHint.className = 'psd-scope-hint';
+          tmpScopeHint.textContent = 'empty = global • * = all';
+          tmpScopeLabel.appendChild(tmpScopeHint);
+          tmpBar.appendChild(tmpScopeLabel);
+
+          // "+ New" button (manage mode only, when on list)
+          if (this.options.Mode === 'manage' && this._state.view === 'list') {
+            let tmpNew = document.createElement('a');
+            tmpNew.className = 'psd-btn psd-btn-primary';
+            tmpNew.textContent = '+ New dashboard';
+            tmpNew.href = 'javascript:void(0)';
+            tmpNew.onclick = () => this.openEditor(null);
+            tmpBar.appendChild(tmpNew);
+          }
+          return tmpBar;
+        }
+
+        // ── List view ─────────────────────────────────────────────────────
+
+        _mountList(pHost) {
+          let tmpStatus = document.createElement('div');
+          tmpStatus.className = 'psd-empty';
+          tmpStatus.textContent = 'Loading…';
+          pHost.appendChild(tmpStatus);
+          this._API.listDashboards().then(pData => {
+            pHost.innerHTML = '';
+            let tmpRows = pData && pData.Dashboards || [];
+            this._state.dashboards = tmpRows;
+            if (tmpRows.length === 0) {
+              let tmpEmpty = document.createElement('div');
+              tmpEmpty.className = 'psd-empty';
+              let tmpScope = this._API.getScope();
+              tmpEmpty.textContent = 'No dashboards in ' + (tmpScope === '' ? 'global scope' : 'scope "' + tmpScope + '"') + '. Use scope=* to see all.';
+              pHost.appendChild(tmpEmpty);
+              return;
+            }
+            let tmpList = document.createElement('div');
+            tmpList.className = 'psd-list';
+            for (let i = 0; i < tmpRows.length; i++) {
+              tmpList.appendChild(this._buildListRow(tmpRows[i]));
+            }
+            pHost.appendChild(tmpList);
+          }).catch(pErr => {
+            pHost.innerHTML = '';
+            let tmpErr = document.createElement('div');
+            tmpErr.className = 'psd-error';
+            tmpErr.textContent = 'Failed to load dashboards: ' + pErr.message;
+            pHost.appendChild(tmpErr);
+          });
+        }
+        _buildListRow(pRow) {
+          let tmpRow = document.createElement('div');
+          tmpRow.className = 'psd-list-row';
+          let tmpHash = document.createElement('div');
+          tmpHash.className = 'psd-row-hash';
+          tmpHash.textContent = pRow.Hash;
+          tmpRow.appendChild(tmpHash);
+          let tmpTitle = document.createElement('div');
+          tmpTitle.className = 'psd-row-title';
+          tmpTitle.textContent = pRow.Title || '(untitled)';
+          tmpRow.appendChild(tmpTitle);
+          let tmpScope = document.createElement('div');
+          tmpScope.className = 'psd-row-scope';
+          if (pRow.Scope) tmpScope.textContent = pRow.Scope;else {
+            tmpScope.textContent = 'global';
+            tmpScope.classList.add('psd-scope-empty');
+          }
+          tmpRow.appendChild(tmpScope);
+          let tmpActions = document.createElement('div');
+          tmpActions.className = 'psd-row-actions';
+          let tmpOpen = document.createElement('a');
+          tmpOpen.className = 'psd-btn';
+          tmpOpen.textContent = 'Open';
+          tmpOpen.href = 'javascript:void(0)';
+          tmpOpen.onclick = () => this.openDashboard(pRow.Hash);
+          tmpActions.appendChild(tmpOpen);
+          if (this.options.Mode === 'manage') {
+            let tmpEdit = document.createElement('a');
+            tmpEdit.className = 'psd-btn';
+            tmpEdit.textContent = 'Edit';
+            tmpEdit.href = 'javascript:void(0)';
+            tmpEdit.onclick = () => this._loadAndEdit(pRow.Hash);
+            tmpActions.appendChild(tmpEdit);
+            let tmpDel = document.createElement('a');
+            tmpDel.className = 'psd-btn psd-btn-danger';
+            tmpDel.textContent = 'Delete';
+            tmpDel.href = 'javascript:void(0)';
+            tmpDel.onclick = () => this._confirmDelete(pRow);
+            tmpActions.appendChild(tmpDel);
+          }
+          tmpRow.appendChild(tmpActions);
+          return tmpRow;
+        }
+        _loadAndEdit(pHash) {
+          this._API.loadDashboard(pHash).then(pCfg => {
+            // loadDashboard returns the parsed Layout; we want raw JSON
+            // for the editor, plus the IDDashboardConfig for the PUT path.
+            // Re-fetch the raw record from the listDashboards cache, then
+            // merge the parsed Layout back as a string for the textarea.
+            let tmpListed = this._state.dashboards.find(d => d.Hash === pCfg.Hash) || {};
+            let tmpRecord = Object.assign({}, tmpListed, pCfg);
+            tmpRecord.LayoutText = JSON.stringify(pCfg.Layout || {}, null, 2);
+            this.openEditor(tmpRecord);
+          }).catch(pErr => {
+            this._toast('Load failed: ' + pErr.message, 'error');
+          });
+        }
+        _confirmDelete(pRow) {
+          // Use pict-section-modal if available; else native confirm as a
+          // safety fallback (lab + data-mapper both register the modal).
+          let tmpModal = this.pict.views && this.pict.views.Modal;
+          if (tmpModal && typeof tmpModal.confirm === 'function') {
+            tmpModal.confirm('Delete dashboard "' + (pRow.Title || pRow.Hash) + '"? This cannot be undone.', {
+              confirmLabel: 'Delete',
+              cancelLabel: 'Cancel',
+              dangerous: true
+            }).then(pOk => {
+              if (pOk) this._doDelete(pRow);
+            });
+            return;
+          }
+          // eslint-disable-next-line no-alert
+          if (typeof confirm === 'function' && confirm('Delete dashboard "' + (pRow.Title || pRow.Hash) + '"?')) {
+            this._doDelete(pRow);
+          }
+        }
+        _doDelete(pRow) {
+          if (!pRow.IDDashboardConfig) {
+            this._toast('Delete failed: list row missing IDDashboardConfig', 'error');
+            return;
+          }
+          this._API.deleteDashboard(pRow.IDDashboardConfig).then(() => {
+            this._toast('Dashboard deleted.', 'success');
+            this.openList();
+          }).catch(pErr => this._toast('Delete failed: ' + pErr.message, 'error'));
+        }
+        _toast(pMsg, pType) {
+          let tmpModal = this.pict.views && this.pict.views.Modal;
+          if (tmpModal && typeof tmpModal.toast === 'function') {
+            tmpModal.toast(pMsg, {
+              type: pType || 'info'
+            });
+            return;
+          }
+          // Last-resort alert
+          // eslint-disable-next-line no-console
+          console.log('[psd]', pMsg);
+        }
+
+        // ── Editor view ────────────────────────────────────────────────────
+
+        _mountEditor(pHost) {
+          let tmpRec = this._state.editing || {
+            Hash: '',
+            Title: '',
+            Scope: this._API.getScope(),
+            LayoutText: '{\n  "Type": "column",\n  "Children": []\n}'
+          };
+          let tmpIsNew = !(tmpRec && tmpRec.IDDashboardConfig);
+          let tmpWrap = document.createElement('div');
+          tmpWrap.className = 'psd-editor';
+          let tmpHeader = document.createElement('div');
+          tmpHeader.className = 'psd-editor-header';
+          let tmpHeaderTitle = document.createElement('h3');
+          tmpHeaderTitle.textContent = tmpIsNew ? 'New dashboard' : 'Edit dashboard "' + tmpRec.Hash + '"';
+          tmpHeader.appendChild(tmpHeaderTitle);
+          tmpWrap.appendChild(tmpHeader);
+          let tmpForm = document.createElement('div');
+          tmpForm.className = 'psd-editor-form';
+
+          // Hash
+          let tmpHashLbl = document.createElement('label');
+          tmpHashLbl.textContent = 'Hash';
+          let tmpHashInput = document.createElement('input');
+          tmpHashInput.type = 'text';
+          tmpHashInput.value = tmpRec.Hash || '';
+          tmpHashInput.placeholder = 'short-identifier (no spaces)';
+          if (!tmpIsNew) tmpHashInput.disabled = true;
+          tmpForm.appendChild(tmpHashLbl);
+          tmpForm.appendChild(tmpHashInput);
+
+          // Title
+          let tmpTitleLbl = document.createElement('label');
+          tmpTitleLbl.textContent = 'Title';
+          let tmpTitleInput = document.createElement('input');
+          tmpTitleInput.type = 'text';
+          tmpTitleInput.value = tmpRec.Title || '';
+          tmpTitleInput.placeholder = 'Human-readable title';
+          tmpForm.appendChild(tmpTitleLbl);
+          tmpForm.appendChild(tmpTitleInput);
+
+          // Scope
+          let tmpScopeLbl = document.createElement('label');
+          tmpScopeLbl.textContent = 'Scope';
+          let tmpScopeInput = document.createElement('input');
+          tmpScopeInput.type = 'text';
+          tmpScopeInput.value = tmpRec.Scope || '';
+          tmpScopeInput.placeholder = '(empty = global)';
+          tmpForm.appendChild(tmpScopeLbl);
+          tmpForm.appendChild(tmpScopeInput);
+
+          // Layout JSON
+          let tmpLayoutLbl = document.createElement('label');
+          tmpLayoutLbl.textContent = 'Layout (JSON)';
+          let tmpLayoutContainer = document.createElement('div');
+          let tmpLayoutTA = document.createElement('textarea');
+          tmpLayoutTA.spellcheck = false;
+          tmpLayoutTA.value = tmpRec.LayoutText || JSON.stringify(tmpRec.Layout || {}, null, 2);
+          let tmpLayoutHelp = document.createElement('div');
+          tmpLayoutHelp.className = 'psd-help';
+          tmpLayoutHelp.innerHTML = 'Recursive: <code>{ Type: "row" | "column", Children: [...] }</code> for containers; <code>{ Type: "list-paged" | "list-compact", Title, BeaconName, ConnectionName, Endpoint, Columns, PageSize | MaxRows }</code> for panels.';
+          tmpLayoutContainer.appendChild(tmpLayoutTA);
+          tmpLayoutContainer.appendChild(tmpLayoutHelp);
+          tmpForm.appendChild(tmpLayoutLbl);
+          tmpForm.appendChild(tmpLayoutContainer);
+          tmpWrap.appendChild(tmpForm);
+          let tmpErrBox = document.createElement('div');
+          tmpErrBox.className = 'psd-editor-error';
+          tmpErrBox.style.display = 'none';
+          tmpWrap.appendChild(tmpErrBox);
+          let tmpActions = document.createElement('div');
+          tmpActions.className = 'psd-editor-actions';
+          let tmpCancel = document.createElement('a');
+          tmpCancel.className = 'psd-btn';
+          tmpCancel.textContent = 'Cancel';
+          tmpCancel.href = 'javascript:void(0)';
+          tmpCancel.onclick = () => this.openList();
+          tmpActions.appendChild(tmpCancel);
+          let tmpSave = document.createElement('a');
+          tmpSave.className = 'psd-btn psd-btn-primary';
+          tmpSave.textContent = tmpIsNew ? 'Create dashboard' : 'Save changes';
+          tmpSave.href = 'javascript:void(0)';
+          tmpSave.onclick = () => {
+            let tmpHash = tmpHashInput.value.trim();
+            let tmpTitle = tmpTitleInput.value;
+            let tmpScope = tmpScopeInput.value.trim();
+            let tmpLayoutRaw = tmpLayoutTA.value;
+            if (!tmpHash) {
+              this._showEditorError(tmpErrBox, 'Hash is required.');
+              return;
+            }
+            let tmpLayoutParsed;
+            try {
+              tmpLayoutParsed = JSON.parse(tmpLayoutRaw);
+            } catch (pErr) {
+              this._showEditorError(tmpErrBox, 'Layout is not valid JSON: ' + pErr.message);
+              return;
+            }
+            let tmpRecord = {
+              Hash: tmpHash,
+              Title: tmpTitle,
+              Scope: tmpScope,
+              Layout: tmpLayoutParsed
+            };
+            if (!tmpIsNew && tmpRec.IDDashboardConfig) tmpRecord.IDDashboardConfig = tmpRec.IDDashboardConfig;
+            tmpSave.textContent = 'Saving…';
+            this._API.saveDashboard(tmpRecord).then(() => {
+              this._toast(tmpIsNew ? 'Dashboard created.' : 'Dashboard saved.', 'success');
+              this.openList();
+            }).catch(pErr => {
+              tmpSave.textContent = tmpIsNew ? 'Create dashboard' : 'Save changes';
+              this._showEditorError(tmpErrBox, pErr.message);
+            });
+          };
+          tmpActions.appendChild(tmpSave);
+          tmpWrap.appendChild(tmpActions);
+          pHost.appendChild(tmpWrap);
+        }
+        _showEditorError(pBox, pMsg) {
+          pBox.textContent = pMsg;
+          pBox.style.display = '';
+        }
+
+        // ── Renderer view ──────────────────────────────────────────────────
+
+        _mountRender(pHost) {
+          let tmpHash = this._state.currentHash;
+          if (!tmpHash) {
+            pHost.innerHTML = '<div class="psd-empty">No dashboard selected.</div>';
+            return;
+          }
+          let tmpStatus = document.createElement('div');
+          tmpStatus.className = 'psd-empty';
+          tmpStatus.textContent = 'Loading dashboard…';
+          pHost.appendChild(tmpStatus);
+          this._API.loadDashboard(tmpHash).then(pCfg => {
+            pHost.innerHTML = '';
+            this._state.currentCfg = pCfg;
+            let tmpTitle = document.createElement('h2');
+            tmpTitle.className = 'psd-render-title';
+            tmpTitle.textContent = pCfg.Title || pCfg.Hash;
+            pHost.appendChild(tmpTitle);
+            let tmpMeta = document.createElement('p');
+            tmpMeta.className = 'psd-render-meta';
+            tmpMeta.textContent = pCfg.Hash + (pCfg.Scope ? '  •  scope: ' + pCfg.Scope : '');
+            pHost.appendChild(tmpMeta);
+            let tmpLayout = pCfg.Layout || {
+              Type: 'column',
+              Children: []
+            };
+            pHost.appendChild(this._renderLayoutNode(tmpLayout, ['p']));
+          }).catch(pErr => {
+            pHost.innerHTML = '';
+            let tmpErr = document.createElement('div');
+            tmpErr.className = 'psd-error';
+            tmpErr.textContent = 'Failed to load dashboard: ' + pErr.message;
+            pHost.appendChild(tmpErr);
+          });
+        }
+        _renderLayoutNode(pNode, pPath) {
+          if (!pNode || typeof pNode !== 'object') {
+            let tmpErr = document.createElement('div');
+            tmpErr.className = 'psd-error';
+            tmpErr.textContent = 'Invalid layout node';
+            return tmpErr;
+          }
+          if (pNode.Type === 'row' || pNode.Type === 'column') {
+            let tmpWrap = document.createElement('div');
+            tmpWrap.className = pNode.Type === 'row' ? 'psd-layout-row' : 'psd-layout-column';
+            let tmpChildren = pNode.Children || [];
+            for (let i = 0; i < tmpChildren.length; i++) {
+              tmpWrap.appendChild(this._renderLayoutNode(tmpChildren[i], pPath.concat([i])));
+            }
+            return tmpWrap;
+          }
+          return this._renderPanel(pNode, pPath.join('-'));
+        }
+        _renderPanel(pPanel, pPanelId) {
+          let tmpCard = document.createElement('div');
+          tmpCard.className = 'psd-panel';
+          let tmpTitle = document.createElement('div');
+          tmpTitle.className = 'psd-panel-title';
+          tmpTitle.textContent = pPanel.Title || pPanel.Endpoint || '(panel)';
+          tmpCard.appendChild(tmpTitle);
+          let tmpMeta = document.createElement('div');
+          tmpMeta.className = 'psd-panel-meta';
+          tmpMeta.textContent = (pPanel.Type || '?') + '  ←  ' + (pPanel.BeaconName || '?') + '/' + (pPanel.ConnectionName || '?') + '/' + (pPanel.Endpoint || '?');
+          tmpCard.appendChild(tmpMeta);
+          let tmpBody = document.createElement('div');
+          tmpCard.appendChild(tmpBody);
+          if (pPanel.Type !== 'list-paged' && pPanel.Type !== 'list-compact') {
+            tmpBody.innerHTML = '<div class="psd-empty">Panel type "' + (pPanel.Type || '?') + '" not yet supported in this renderer.</div>';
+            return tmpCard;
+          }
+          this._panelState[pPanelId] = this._panelState[pPanelId] || {
+            page: 0
+          };
+          let tmpPageSize = pPanel.Type === 'list-compact' ? pPanel.MaxRows || this.options.ListCompactRows : pPanel.PageSize || this.options.ListPageSize;
+          let _self = this;
+          function fFetchPage(pPage) {
+            tmpBody.innerHTML = '<div class="psd-empty">Loading…</div>';
+            _self._API.fetchPanelData(pPanel, pPage, tmpPageSize).then(pData => {
+              _self._renderPanelTable(tmpBody, pPanel, pData.Rows || [], pPage, tmpPageSize, fFetchPage);
+            }).catch(pErr => {
+              tmpBody.innerHTML = '';
+              let tmpErr = document.createElement('div');
+              tmpErr.className = 'psd-error';
+              tmpErr.textContent = pErr.message;
+              tmpBody.appendChild(tmpErr);
+            });
+          }
+          fFetchPage(this._panelState[pPanelId].page);
+          return tmpCard;
+        }
+        _renderPanelTable(pHost, pPanel, pRows, pPage, pPageSize, fFetchPage) {
+          pHost.innerHTML = '';
+          if (pRows.length === 0 && pPage === 0) {
+            pHost.innerHTML = '<div class="psd-empty">No rows.</div>';
+            return;
+          }
+          let tmpCols = pPanel.Columns && pPanel.Columns.length > 0 ? pPanel.Columns : Object.keys(pRows[0] || {}).filter(k => !/^(IDCachedView|GUIDCachedView|ID[A-Z]|GUID[A-Z]|Deleted|Delete|Create|Update|Creating|Updating|Deleting)/.test(k));
+          let tmpTable = document.createElement('table');
+          tmpTable.className = 'psd-panel-table';
+          let tmpThead = document.createElement('thead');
+          let tmpTrh = document.createElement('tr');
+          for (let c = 0; c < tmpCols.length; c++) {
+            let tmpTh = document.createElement('th');
+            tmpTh.textContent = tmpCols[c];
+            tmpTrh.appendChild(tmpTh);
+          }
+          tmpThead.appendChild(tmpTrh);
+          tmpTable.appendChild(tmpThead);
+          let tmpTbody = document.createElement('tbody');
+          for (let r = 0; r < pRows.length; r++) {
+            let tmpTr = document.createElement('tr');
+            for (let c = 0; c < tmpCols.length; c++) {
+              let tmpTd = document.createElement('td');
+              let tmpV = pRows[r][tmpCols[c]];
+              tmpTd.textContent = tmpV === null || tmpV === undefined ? '' : String(tmpV);
+              tmpTr.appendChild(tmpTd);
+            }
+            tmpTbody.appendChild(tmpTr);
+          }
+          tmpTable.appendChild(tmpTbody);
+          pHost.appendChild(tmpTable);
+          if (pPanel.Type === 'list-paged') {
+            let tmpPager = document.createElement('div');
+            tmpPager.className = 'psd-pager';
+            let tmpPrev = document.createElement('a');
+            tmpPrev.className = 'psd-btn';
+            tmpPrev.textContent = '← prev';
+            tmpPrev.href = 'javascript:void(0)';
+            if (pPage === 0) {
+              tmpPrev.style.opacity = '0.4';
+              tmpPrev.style.pointerEvents = 'none';
+            } else tmpPrev.onclick = () => fFetchPage(pPage - 1);
+            let tmpNext = document.createElement('a');
+            tmpNext.className = 'psd-btn';
+            tmpNext.textContent = 'next →';
+            tmpNext.href = 'javascript:void(0)';
+            if (pRows.length < pPageSize) {
+              tmpNext.style.opacity = '0.4';
+              tmpNext.style.pointerEvents = 'none';
+            } else tmpNext.onclick = () => fFetchPage(pPage + 1);
+            let tmpLabel = document.createElement('span');
+            tmpLabel.className = 'psd-pager-label';
+            tmpLabel.textContent = 'page ' + (pPage + 1) + '  •  ' + pRows.length + ' rows';
+            tmpPager.appendChild(tmpPrev);
+            tmpPager.appendChild(tmpNext);
+            tmpPager.appendChild(tmpLabel);
+            pHost.appendChild(tmpPager);
+          }
+        }
+      }
+
+      // Static config templates. The Pict view base class needs at least
+      // minimal Templates / Renderables to call render() — it expects to
+      // substitute a template into a destination. We define a no-op shell
+      // template that just provides an anchor; everything visible is
+      // painted by _mount() in onAfterRender.
+      PictSectionDashboard.default_configuration = Object.assign({}, libDefaultConf, {
+        Templates: [{
+          Hash: 'Pict-Section-Dashboard-Shell',
+          Template: '<div class="psd-shell-anchor"></div>'
+        }],
+        Renderables: [{
+          RenderableHash: 'Pict-Section-Dashboard-Shell',
+          TemplateHash: 'Pict-Section-Dashboard-Shell',
+          ContentDestinationAddress: libDefaultConf.DefaultDestinationAddress
+        }]
+      });
+      module.exports = PictSectionDashboard;
+      module.exports.default_configuration = PictSectionDashboard.default_configuration;
+      module.exports.APIProvider = libAPIProvider;
+    }, {
+      "./Pict-Section-Dashboard-CSS.js": 6,
+      "./Pict-Section-Dashboard-DefaultConfiguration.js": 7,
+      "./providers/PictProvider-Dashboard-API.js": 9,
+      "pict-view": 32
+    }],
+    9: [function (require, module, exports) {
+      /**
+       * Pict-Section-Dashboard API Provider
+       *
+       * Thin REST client that talks to retold-data-mapper's /mapper/* surface.
+       * Centralizes scope handling: the active scope is read from localStorage
+       * (key `retold.dataMapper.activeScope`) but can be overridden per-call.
+       *
+       * The host application doesn't have to know how the data-mapper REST is
+       * shaped — it just calls listDashboards / loadDashboard / saveDashboard /
+       * deleteDashboard / fetchPanelData and gets a Promise back.
+       */
+      'use strict';
+
+      const SCOPE_STORAGE_KEY = 'retold.dataMapper.activeScope';
+      class DashboardAPIProvider {
+        constructor(pOptions) {
+          let tmpOptions = pOptions || {};
+          this._apiBaseUrl = tmpOptions.APIBaseUrl || '/mapper';
+          this._scopeOverride = typeof tmpOptions.Scope === 'string' ? tmpOptions.Scope : null;
+        }
+
+        /**
+         * Resolve the active scope. Order: explicit per-call scope →
+         * provider option → localStorage → '' (global).
+         */
+        getScope(pCallScope) {
+          if (typeof pCallScope === 'string') return pCallScope;
+          if (typeof this._scopeOverride === 'string') return this._scopeOverride;
+          if (typeof localStorage !== 'undefined') {
+            let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
+            if (tmpStored !== null) return tmpStored;
+          }
+          return '';
+        }
+        setScope(pScope) {
+          if (typeof localStorage !== 'undefined') {
+            if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
+          }
+          this._scopeOverride = typeof pScope === 'string' ? pScope : null;
+        }
+
+        /**
+         * Internal fetch wrapper that surfaces non-2xx as rejected promises.
+         */
+        _fetch(pMethod, pPath, pBody) {
+          let tmpOpts = {
+            method: pMethod,
+            headers: {}
+          };
+          if (pBody !== undefined && pBody !== null) {
+            tmpOpts.headers['Content-Type'] = 'application/json';
+            tmpOpts.body = JSON.stringify(pBody);
+          }
+          return fetch(this._apiBaseUrl + pPath, tmpOpts).then(pRes => {
+            if (!pRes.ok) {
+              return pRes.text().then(pText => {
+                let tmpMsg = pText && pText.length < 300 ? pText : 'HTTP ' + pRes.status;
+                throw new Error(tmpMsg);
+              });
+            }
+            let tmpCT = pRes.headers.get('content-type') || '';
+            if (tmpCT.indexOf('application/json') === 0) return pRes.json();
+            return pRes.text();
+          });
+        }
+        _scopeQuery(pScope) {
+          let tmpScope = this.getScope(pScope);
+          // Empty string scope is the default on the server; no need to send it.
+          // '*' explicitly asks for cross-scope listing.
+          if (tmpScope === '') return '';
+          return '?scope=' + encodeURIComponent(tmpScope);
+        }
+        listDashboards(pScope) {
+          return this._fetch('GET', '/dashboards' + this._scopeQuery(pScope));
+        }
+        loadDashboard(pHash, pScope) {
+          return this._fetch('GET', '/dashboard/' + encodeURIComponent(pHash) + this._scopeQuery(pScope));
+        }
+        saveDashboard(pRecord, pScope) {
+          // Caller's record can omit Scope; we inject the active one if so.
+          let tmpRecord = Object.assign({}, pRecord);
+          if (tmpRecord.Scope === undefined) tmpRecord.Scope = this.getScope(pScope);
+          if (tmpRecord.IDDashboardConfig) {
+            let tmpID = tmpRecord.IDDashboardConfig;
+            delete tmpRecord.IDDashboardConfig;
+            return this._fetch('PUT', '/dashboard/' + tmpID, tmpRecord);
+          }
+          return this._fetch('POST', '/dashboards', tmpRecord);
+        }
+        deleteDashboard(pID) {
+          return this._fetch('DELETE', '/dashboard/' + pID);
+        }
+        fetchPanelData(pPanel, pPage, pPageSize) {
+          return this._fetch('POST', '/dashboard/panel-data', {
+            BeaconName: pPanel.BeaconName,
+            ConnectionName: pPanel.ConnectionName,
+            Endpoint: pPanel.Endpoint,
+            PageSize: pPageSize,
+            Page: pPage
+          });
+        }
+      }
+      module.exports = DashboardAPIProvider;
+      module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
+    }, {}],
+    10: [function (require, module, exports) {
+      /**
+       * Pict-Section-Mapping CSS
+       *
+       * All class names prefixed `psm-` (Pict Section Mapping). Same color
+       * palette + button styling as the dashboard / operation sections so a
+       * host mounting all three sees a consistent look.
+       */
+      'use strict';
+
+      module.exports = `
+.psm-root
+{
+	--psm-bg:           #0e1a2b;
+	--psm-bg-elev:      #0a1525;
+	--psm-bg-elev-2:    #0f172a;
+	--psm-border:       #1e293b;
+	--psm-border-soft:  #0f1c2f;
+	--psm-fg:           #f8fafc;
+	--psm-fg-soft:      #cbd5e1;
+	--psm-fg-mute:      #94a3b8;
+	--psm-fg-fade:      #64748b;
+	--psm-accent:       #2563eb;
+	--psm-accent-fg:    #ffffff;
+	--psm-success:      #16a34a;
+	--psm-success-fg:   #dcfce7;
+	--psm-danger:       #b91c1c;
+	--psm-danger-fg:    #fecaca;
+
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	background: var(--psm-bg);
+	color: var(--psm-fg);
+	min-height: 100%;
+}
+
+.psm-toolbar
+{
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 16px;
+	background: var(--psm-bg-elev);
+	border-bottom: 1px solid var(--psm-border);
+	flex-wrap: wrap;
+}
+.psm-toolbar h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.psm-toolbar .psm-toolbar-spacer { flex: 1; }
+.psm-toolbar label { color: var(--psm-fg-mute); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.psm-toolbar input
+{
+	background: var(--psm-bg-elev-2);
+	color: var(--psm-fg);
+	border: 1px solid var(--psm-border);
+	padding: 5px 9px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: inherit;
+}
+.psm-toolbar input.psm-scope-input { width: 140px; font-family: monospace; }
+.psm-toolbar .psm-scope-hint { color: var(--psm-fg-fade); font-size: 11px; font-style: italic; }
+.psm-btn
+{
+	background: var(--psm-bg-elev-2);
+	color: var(--psm-fg-soft);
+	border: 1px solid var(--psm-border);
+	padding: 5px 11px;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	text-decoration: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.psm-btn:hover { background: #1e293b; color: var(--psm-fg); }
+.psm-btn.psm-btn-primary { background: var(--psm-accent); border-color: var(--psm-accent); color: var(--psm-accent-fg); }
+.psm-btn.psm-btn-primary:hover { background: #1d4ed8; }
+.psm-btn.psm-btn-success { background: var(--psm-success); border-color: var(--psm-success); color: var(--psm-success-fg); }
+.psm-btn.psm-btn-success:hover { background: #15803d; }
+.psm-btn.psm-btn-danger { background: transparent; color: var(--psm-danger-fg); border-color: var(--psm-danger); }
+.psm-btn.psm-btn-danger:hover { background: var(--psm-danger); color: var(--psm-accent-fg); }
+.psm-btn[disabled], .psm-btn.psm-btn-disabled { opacity: 0.5; pointer-events: none; }
+
+.psm-content { padding: 16px; max-width: 1400px; margin: 0 auto; }
+
+/* List view */
+.psm-list { display: flex; flex-direction: column; gap: 8px; }
+.psm-list-row
+{
+	display: grid;
+	grid-template-columns: 1.5fr 1.6fr 2fr auto;
+	gap: 12px;
+	padding: 10px 14px;
+	background: var(--psm-bg-elev);
+	border: 1px solid var(--psm-border);
+	border-radius: 6px;
+	align-items: center;
+}
+.psm-list-row .psm-row-name { font-family: monospace; font-size: 13px; color: var(--psm-fg); font-weight: 600; }
+.psm-list-row .psm-row-name .psm-row-scope { color: var(--psm-fg-fade); font-style: italic; font-weight: 400; margin-left: 6px; font-size: 11px; }
+.psm-list-row .psm-row-desc { color: var(--psm-fg-soft); font-size: 12px; }
+.psm-list-row .psm-row-flow { font-size: 11px; color: var(--psm-fg-mute); font-family: monospace; }
+.psm-list-row .psm-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+.psm-empty, .psm-error
+{
+	padding: 18px;
+	text-align: center;
+	color: var(--psm-fg-fade);
+	font-size: 13px;
+	border: 1px dashed var(--psm-border);
+	border-radius: 6px;
+	background: var(--psm-bg-elev);
+}
+.psm-error { color: #f87171; background: #2a1010; border-color: #2a1010; }
+
+/* Editor */
+.psm-editor { display: flex; flex-direction: column; gap: 14px; }
+.psm-editor-header { display: flex; gap: 12px; align-items: center; }
+.psm-editor-header h3 { margin: 0; font-size: 16px; }
+.psm-editor-form { display: grid; grid-template-columns: 160px 1fr; gap: 10px 14px; align-items: center; }
+.psm-editor-form label { color: var(--psm-fg-mute); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.psm-editor-form input[type=text]
+{
+	background: var(--psm-bg-elev-2);
+	color: var(--psm-fg);
+	border: 1px solid var(--psm-border);
+	padding: 6px 10px;
+	border-radius: 4px;
+	font-size: 13px;
+	font-family: inherit;
+}
+.psm-editor-form .psm-help { color: var(--psm-fg-fade); font-size: 11px; font-style: italic; }
+.psm-editor-form textarea
+{
+	background: var(--psm-bg-elev-2);
+	color: var(--psm-fg);
+	border: 1px solid var(--psm-border);
+	padding: 8px 10px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: monospace;
+	min-height: 240px;
+	resize: vertical;
+	width: 100%;
+	box-sizing: border-box;
+}
+.psm-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.psm-editor-error { color: #f87171; font-size: 12px; padding: 8px 12px; background: #2a1010; border-radius: 4px; }
+.psm-source-target
+{
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 14px;
+	padding: 12px;
+	background: var(--psm-bg-elev-2);
+	border: 1px solid var(--psm-border);
+	border-radius: 4px;
+}
+.psm-source-target .psm-st-section h4 { margin: 0 0 8px 0; color: var(--psm-fg-mute); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.psm-source-target .psm-st-row { display: grid; grid-template-columns: 90px 1fr; gap: 6px; margin-bottom: 6px; align-items: center; }
+.psm-source-target .psm-st-row label { color: var(--psm-fg-fade); font-size: 11px; }
+
+/* Run result */
+.psm-run-result
+{
+	padding: 14px;
+	background: var(--psm-bg-elev);
+	border: 1px solid var(--psm-border);
+	border-radius: 6px;
+	margin-top: 10px;
+	font-size: 13px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.psm-run-result h4 { margin: 0; font-size: 14px; color: var(--psm-fg-soft); }
+.psm-run-result .psm-run-stats { display: flex; gap: 18px; flex-wrap: wrap; }
+.psm-run-result .psm-run-stat { display: flex; flex-direction: column; }
+.psm-run-result .psm-run-stat .psm-stat-label { font-size: 10px; color: var(--psm-fg-mute); text-transform: uppercase; letter-spacing: 0.5px; }
+.psm-run-result .psm-run-stat .psm-stat-value { font-size: 16px; color: var(--psm-fg); font-family: monospace; font-weight: 600; }
+.psm-run-result.psm-run-success { border-color: var(--psm-success); }
+.psm-run-result.psm-run-error   { border-color: var(--psm-danger); }
+
+.psm-discover-bar
+{
+	display: flex; align-items: center;
+	margin-bottom: 6px;
+}
+.psm-btn-secondary
+{
+	background: var(--psm-bg-elev); color: var(--psm-fg);
+	border: 1px solid var(--psm-border);
+}
+.psm-btn-secondary:hover { filter: brightness(1.15); }
+.psm-chip-bar
+{
+	display: flex; flex-wrap: wrap; gap: 4px;
+	margin-bottom: 6px; padding: 6px;
+	background: var(--psm-bg-elev); border: 1px solid var(--psm-border);
+	border-radius: 4px;
+	max-height: 120px; overflow-y: auto;
+}
+.psm-chip
+{
+	display: inline-block; padding: 3px 8px;
+	background: var(--psm-bg); color: var(--psm-fg);
+	border: 1px solid var(--psm-border); border-radius: 12px;
+	font-size: 11px; font-family: monospace;
+	text-decoration: none; cursor: pointer;
+	user-select: none;
+}
+.psm-chip:hover { background: var(--psm-accent); color: #fff; border-color: var(--psm-accent); }
+`;
+    }, {}],
+    11: [function (require, module, exports) {
+      /**
+       * Pict-Section-Mapping default configuration.
+       */
+      'use strict';
+
+      module.exports = {
+        ViewIdentifier: 'Pict-Section-Mapping',
+        DefaultRenderable: 'Pict-Section-Mapping-Shell',
+        DefaultDestinationAddress: '#Pict-Section-Mapping',
+        AutoRender: true,
+        APIBaseUrl: '/mapper',
+        Mode: 'manage',
+        // 'manage' | 'list-only'
+        ShowToolbar: true,
+        Scope: null
+      };
+    }, {}],
+    12: [function (require, module, exports) {
+      /**
+       * Pict-Section-Mapping
+       *
+       * Embeddable Pict view for Mapping CRUD. Mappings are intent docs that
+       * the data-mapper compiles into Ultravisor Operations on demand. The
+       * Run / Save-and-Schedule actions live on the editor and route through
+       * the data-mapper bridge's /uv/* proxy endpoints to Ultravisor.
+       *
+       *   - List view with per-row Edit / Delete actions
+       *   - Editor with form fields + JSON MappingConfiguration textarea
+       *
+       * Note: the data-mapper also has a separate visual mapping editor
+       * (the existing pict-app at index.html) for graphical field mapping.
+       * This section is the lightweight CRUD surface; the visual editor is
+       * the richer alternative for editing MappingConfiguration.
+       */
+      'use strict';
+
+      const libPictView = require('pict-view');
+      const libDefaultConf = require('./Pict-Section-Mapping-DefaultConfiguration.js');
+      const libCSS = require('./Pict-Section-Mapping-CSS.js');
+      const libAPIProvider = require('./providers/PictProvider-Mapping-API.js');
+      const DEFAULT_MAPPING_CONFIGURATION = {
+        Entity: '/* TargetEntity */',
+        GUIDName: 'GUID/* TargetEntity */',
+        GUIDTemplate: '/* {~D:Record.SourceField~} for unique-per-row GUID */',
+        Solvers: [],
+        Mappings: {
+          '/* TargetField */': '{~D:Record./* SourceField */~}'
+        }
+      };
+      class PictSectionMapping extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          let tmpOptions = Object.assign({}, libDefaultConf, pOptions || {});
+          super(pFable, tmpOptions, pServiceHash);
+          this._API = new libAPIProvider({
+            APIBaseUrl: this.options.APIBaseUrl,
+            Scope: this.options.Scope
+          });
+          this._state = {
+            view: 'list',
+            mappings: [],
+            editing: null
+          };
+          if (this.pict && this.pict.CSSMap && typeof this.pict.CSSMap.addCSS === 'function') {
+            this.pict.CSSMap.addCSS('Pict-Section-Mapping-CSS', libCSS, 500);
+          }
+        }
+        openList() {
+          this._state.view = 'list';
+          this._state.editing = null;
+          this.render();
+        }
+        openEditor(pRec) {
+          this._state.editing = pRec || null;
+          this._state.view = 'edit';
+          this.render();
+        }
+        refresh() {
+          this.render();
+        }
+        onAfterRender(pRenderable, pAddress, pRecord, pContent) {
+          this.pict.CSSMap.injectCSS();
+          this._mount();
+          return super.onAfterRender(pRenderable, pAddress, pRecord, pContent);
+        }
+        _mount() {
+          let tmpDest = this._dest();
+          if (!tmpDest) return;
+          tmpDest.innerHTML = '';
+          tmpDest.classList.add('psm-root');
+          tmpDest.classList.add('psm-mode-' + this.options.Mode);
+          if (this.options.ShowToolbar) tmpDest.appendChild(this._buildToolbar());
+          let tmpContent = document.createElement('div');
+          tmpContent.className = 'psm-content';
+          tmpDest.appendChild(tmpContent);
+          if (this._state.view === 'list') this._mountList(tmpContent);else if (this._state.view === 'edit') this._mountEditor(tmpContent);
+        }
+        _dest() {
+          let tmpAddr = this.options.ContentDestinationAddress;
+          if (!tmpAddr || typeof document === 'undefined') return null;
+          return document.querySelector(tmpAddr);
+        }
+        _buildToolbar() {
+          let tmpBar = document.createElement('div');
+          tmpBar.className = 'psm-toolbar';
+          let tmpTitle = document.createElement('h2');
+          tmpTitle.textContent = 'Mappings';
+          tmpBar.appendChild(tmpTitle);
+          if (this._state.view !== 'list') {
+            let tmpBack = document.createElement('a');
+            tmpBack.className = 'psm-btn';
+            tmpBack.textContent = '← All mappings';
+            tmpBack.href = 'javascript:void(0)';
+            tmpBack.onclick = () => this.openList();
+            tmpBar.appendChild(tmpBack);
+          }
+          let tmpSpacer = document.createElement('span');
+          tmpSpacer.className = 'psm-toolbar-spacer';
+          tmpBar.appendChild(tmpSpacer);
+          let tmpScopeLabel = document.createElement('label');
+          tmpScopeLabel.textContent = 'scope';
+          let tmpScopeInput = document.createElement('input');
+          tmpScopeInput.type = 'text';
+          tmpScopeInput.className = 'psm-scope-input';
+          tmpScopeInput.placeholder = '(global)';
+          tmpScopeInput.spellcheck = false;
+          tmpScopeInput.value = this._API.getScope();
+          let tmpDebounce = null;
+          tmpScopeInput.oninput = () => {
+            clearTimeout(tmpDebounce);
+            tmpDebounce = setTimeout(() => {
+              this._API.setScope(tmpScopeInput.value.trim());
+              this._state.view = 'list';
+              this._state.editing = null;
+              this.render();
+            }, 300);
+          };
+          tmpScopeLabel.appendChild(tmpScopeInput);
+          let tmpScopeHint = document.createElement('span');
+          tmpScopeHint.className = 'psm-scope-hint';
+          tmpScopeHint.textContent = 'empty = global • * = all';
+          tmpScopeLabel.appendChild(tmpScopeHint);
+          tmpBar.appendChild(tmpScopeLabel);
+          if (this.options.Mode === 'manage' && this._state.view === 'list') {
+            let tmpNew = document.createElement('a');
+            tmpNew.className = 'psm-btn psm-btn-primary';
+            tmpNew.textContent = '+ New mapping';
+            tmpNew.href = 'javascript:void(0)';
+            tmpNew.onclick = () => this.openEditor(null);
+            tmpBar.appendChild(tmpNew);
+          }
+          return tmpBar;
+        }
+
+        // ── List view ──────────────────────────────────────────────────
+
+        _mountList(pHost) {
+          let tmpStatus = document.createElement('div');
+          tmpStatus.className = 'psm-empty';
+          tmpStatus.textContent = 'Loading…';
+          pHost.appendChild(tmpStatus);
+          this._API.listMappings().then(pData => {
+            pHost.innerHTML = '';
+            let tmpRows = pData && pData.Mappings || [];
+            this._state.mappings = tmpRows;
+            if (tmpRows.length === 0) {
+              let tmpEmpty = document.createElement('div');
+              tmpEmpty.className = 'psm-empty';
+              let tmpScope = this._API.getScope();
+              tmpEmpty.textContent = 'No mappings in ' + (tmpScope === '' ? 'global scope' : 'scope "' + tmpScope + '"') + '. Use scope=* to see all.';
+              pHost.appendChild(tmpEmpty);
+              return;
+            }
+            let tmpList = document.createElement('div');
+            tmpList.className = 'psm-list';
+            for (let i = 0; i < tmpRows.length; i++) tmpList.appendChild(this._buildListRow(tmpRows[i]));
+            pHost.appendChild(tmpList);
+          }).catch(pErr => {
+            pHost.innerHTML = '';
+            let tmpErr = document.createElement('div');
+            tmpErr.className = 'psm-error';
+            tmpErr.textContent = 'Failed to load mappings: ' + pErr.message;
+            pHost.appendChild(tmpErr);
+          });
+        }
+        _buildListRow(pRow) {
+          let tmpRow = document.createElement('div');
+          tmpRow.className = 'psm-list-row';
+          let tmpName = document.createElement('div');
+          tmpName.className = 'psm-row-name';
+          tmpName.textContent = pRow.Name || '(unnamed)';
+          if (pRow.Scope) {
+            let tmpScope = document.createElement('span');
+            tmpScope.className = 'psm-row-scope';
+            tmpScope.textContent = '· ' + pRow.Scope;
+            tmpName.appendChild(tmpScope);
+          }
+          tmpRow.appendChild(tmpName);
+          let tmpDesc = document.createElement('div');
+          tmpDesc.className = 'psm-row-desc';
+          tmpDesc.textContent = pRow.Description || '';
+          tmpRow.appendChild(tmpDesc);
+          let tmpFlow = document.createElement('div');
+          tmpFlow.className = 'psm-row-flow';
+          tmpFlow.textContent = (pRow.SourceBeaconName || '?') + '/' + (pRow.SourceEntity || '?') + ' → ' + (pRow.TargetBeaconName || '?') + '/' + (pRow.TargetEntity || '?');
+          tmpRow.appendChild(tmpFlow);
+          let tmpActions = document.createElement('div');
+          tmpActions.className = 'psm-row-actions';
+          if (this.options.Mode === 'manage') {
+            let tmpRun = document.createElement('a');
+            tmpRun.className = 'psm-btn psm-btn-success';
+            tmpRun.textContent = '▶ Run via UV';
+            tmpRun.href = 'javascript:void(0)';
+            tmpRun.onclick = () => this._runViaUltravisor(pRow, tmpRow);
+            tmpRun.title = 'Compile this mapping into an Ultravisor Operation, run it through UV\'s queue, and show the manifest summary.';
+            tmpActions.appendChild(tmpRun);
+            let tmpEdit = document.createElement('a');
+            tmpEdit.className = 'psm-btn';
+            tmpEdit.textContent = 'Edit';
+            tmpEdit.href = 'javascript:void(0)';
+            tmpEdit.onclick = () => this.openEditor(pRow);
+            tmpActions.appendChild(tmpEdit);
+            let tmpDel = document.createElement('a');
+            tmpDel.className = 'psm-btn psm-btn-danger';
+            tmpDel.textContent = 'Delete';
+            tmpDel.href = 'javascript:void(0)';
+            tmpDel.onclick = () => this._confirmDelete(pRow);
+            tmpActions.appendChild(tmpDel);
+          }
+          tmpRow.appendChild(tmpActions);
+          return tmpRow;
+        }
+
+        // Compile this mapping into a UV Operation (server-side), run it through
+        // the queue, and render the manifest summary inline. This is the new
+        // "glue" path — the data-mapper UI captures intent, UV does the work.
+        _runViaUltravisor(pRow, pRowEl) {
+          if (!pRow.IDMappingConfig) {
+            this._toast('Run failed: missing IDMappingConfig', 'error');
+            return;
+          }
+          let tmpRunBtn = pRowEl.querySelector('.psm-btn-success');
+          let tmpOriginal = tmpRunBtn ? tmpRunBtn.textContent : '';
+          if (tmpRunBtn) {
+            tmpRunBtn.textContent = 'Running…';
+            tmpRunBtn.classList.add('psm-btn-disabled');
+          }
+          this._API.runViaUltravisor(pRow.IDMappingConfig).then(pResult => {
+            if (tmpRunBtn) {
+              tmpRunBtn.textContent = tmpOriginal;
+              tmpRunBtn.classList.remove('psm-btn-disabled');
+            }
+            this._renderUVResult(pRowEl, pRow, pResult, false);
+          }).catch(pErr => {
+            if (tmpRunBtn) {
+              tmpRunBtn.textContent = tmpOriginal;
+              tmpRunBtn.classList.remove('psm-btn-disabled');
+            }
+            this._renderUVResult(pRowEl, pRow, {
+              Error: pErr.message
+            }, true);
+          });
+        }
+        _renderUVResult(pRowEl, pRow, pResult, pIsError) {
+          let tmpExisting = pRowEl.nextElementSibling;
+          if (tmpExisting && tmpExisting.classList && tmpExisting.classList.contains('psm-run-result')) tmpExisting.remove();
+          let tmpPanel = document.createElement('div');
+          tmpPanel.className = 'psm-run-result ' + (pIsError ? 'psm-run-error' : 'psm-run-success');
+          let tmpHeader = document.createElement('h4');
+          let tmpName = pRow.Name || pRow.Hash || 'mapping ' + pRow.IDMappingConfig;
+          let tmpUVLabel = pResult && pResult.OperationHash ? ' [' + pResult.OperationHash + ']' : '';
+          tmpHeader.textContent = pIsError ? '✗  ' + tmpName + ' — failed' : '✓  ' + tmpName + tmpUVLabel + ' — ' + (pResult.Status || 'unknown');
+          tmpPanel.appendChild(tmpHeader);
+          if (pIsError) {
+            let tmpErr = document.createElement('div');
+            tmpErr.style.color = '#fecaca';
+            tmpErr.style.fontFamily = 'monospace';
+            tmpErr.style.fontSize = '12px';
+            tmpErr.textContent = pResult.Error;
+            tmpPanel.appendChild(tmpErr);
+          } else {
+            let tmpStats = document.createElement('div');
+            tmpStats.className = 'psm-run-stats';
+            let tmpTopFields = ['ElapsedMs'];
+            for (let i = 0; i < tmpTopFields.length; i++) {
+              if (pResult[tmpTopFields[i]] === undefined || pResult[tmpTopFields[i]] === null) continue;
+              let tmpStat = document.createElement('div');
+              tmpStat.className = 'psm-run-stat';
+              let tmpLabel = document.createElement('span');
+              tmpLabel.className = 'psm-stat-label';
+              tmpLabel.textContent = tmpTopFields[i];
+              let tmpValue = document.createElement('span');
+              tmpValue.className = 'psm-stat-value';
+              tmpValue.textContent = String(pResult[tmpTopFields[i]]);
+              tmpStat.appendChild(tmpLabel);
+              tmpStat.appendChild(tmpValue);
+              tmpStats.appendChild(tmpStat);
+            }
+            tmpPanel.appendChild(tmpStats);
+
+            // Per-task breakdown — pull/map/write counts from the manifest.
+            let tmpTO = pResult.TaskOutputs || {};
+            let tmpTaskKeys = Object.keys(tmpTO);
+            if (tmpTaskKeys.length > 0) {
+              let tmpBreakdown = document.createElement('div');
+              tmpBreakdown.className = 'psm-run-stats';
+              tmpBreakdown.style.marginTop = '8px';
+              for (let k = 0; k < tmpTaskKeys.length; k++) {
+                let tmpKey = tmpTaskKeys[k];
+                let tmpRow = tmpTO[tmpKey];
+                let tmpStat = document.createElement('div');
+                tmpStat.className = 'psm-run-stat';
+                let tmpLabel = document.createElement('span');
+                tmpLabel.className = 'psm-stat-label';
+                tmpLabel.textContent = tmpKey;
+                let tmpValue = document.createElement('span');
+                tmpValue.className = 'psm-stat-value';
+                let tmpParts = [];
+                if (tmpRow.RecordCount !== undefined) tmpParts.push('records=' + tmpRow.RecordCount);
+                if (tmpRow.Written !== undefined) tmpParts.push('written=' + tmpRow.Written);
+                if (tmpRow.Errors !== undefined && tmpRow.Errors !== 0) tmpParts.push('errors=' + tmpRow.Errors);
+                tmpValue.textContent = tmpParts.join('  ');
+                tmpStat.appendChild(tmpLabel);
+                tmpStat.appendChild(tmpValue);
+                tmpBreakdown.appendChild(tmpStat);
+              }
+              tmpPanel.appendChild(tmpBreakdown);
+            }
+          }
+          pRowEl.parentNode.insertBefore(tmpPanel, pRowEl.nextSibling);
+        }
+        _confirmDelete(pRow) {
+          let tmpModal = this.pict.views && this.pict.views.Modal;
+          if (tmpModal && typeof tmpModal.confirm === 'function') {
+            tmpModal.confirm('Delete mapping "' + (pRow.Name || pRow.Hash) + '"? This cannot be undone.', {
+              confirmLabel: 'Delete',
+              cancelLabel: 'Cancel',
+              dangerous: true
+            }).then(pOk => {
+              if (pOk) this._doDelete(pRow);
+            });
+            return;
+          }
+          // eslint-disable-next-line no-alert
+          if (typeof confirm === 'function' && confirm('Delete mapping "' + pRow.Name + '"?')) this._doDelete(pRow);
+        }
+        _doDelete(pRow) {
+          if (!pRow.IDMappingConfig) {
+            this._toast('Delete failed: missing IDMappingConfig', 'error');
+            return;
+          }
+          this._API.deleteMapping(pRow.IDMappingConfig).then(() => {
+            this._toast('Mapping deleted.', 'success');
+            this.openList();
+          }).catch(pErr => this._toast('Delete failed: ' + pErr.message, 'error'));
+        }
+        _toast(pMsg, pType) {
+          let tmpModal = this.pict.views && this.pict.views.Modal;
+          if (tmpModal && typeof tmpModal.toast === 'function') {
+            tmpModal.toast(pMsg, {
+              type: pType || 'info'
+            });
+            return;
+          }
+          // eslint-disable-next-line no-console
+          console.log('[psm]', pMsg);
+        }
+
+        // ── Editor ─────────────────────────────────────────────────────
+
+        _mountEditor(pHost) {
+          let tmpRec = this._state.editing || {
+            Scope: this._API.getScope(),
+            Name: '',
+            Description: '',
+            SourceBeaconName: '',
+            SourceConnectionHash: '',
+            SourceEntity: '',
+            TargetBeaconName: '',
+            TargetConnectionHash: '',
+            TargetEntity: '',
+            MappingConfiguration: JSON.stringify(DEFAULT_MAPPING_CONFIGURATION, null, 2)
+          };
+          let tmpIsNew = !(tmpRec && tmpRec.IDMappingConfig);
+          let tmpConfText = typeof tmpRec.MappingConfiguration === 'string' ? tmpRec.MappingConfiguration : JSON.stringify(tmpRec.MappingConfiguration || {}, null, 2);
+          let tmpWrap = document.createElement('div');
+          tmpWrap.className = 'psm-editor';
+          let tmpHeader = document.createElement('div');
+          tmpHeader.className = 'psm-editor-header';
+          let tmpHeaderTitle = document.createElement('h3');
+          tmpHeaderTitle.textContent = tmpIsNew ? 'New mapping' : 'Edit mapping "' + (tmpRec.Name || tmpRec.IDMappingConfig) + '"';
+          tmpHeader.appendChild(tmpHeaderTitle);
+          tmpWrap.appendChild(tmpHeader);
+          let tmpForm = document.createElement('div');
+          tmpForm.className = 'psm-editor-form';
+          let tmpNameLbl = document.createElement('label');
+          tmpNameLbl.textContent = 'Name';
+          let tmpNameInput = document.createElement('input');
+          tmpNameInput.type = 'text';
+          tmpNameInput.value = tmpRec.Name || '';
+          tmpNameInput.placeholder = 'Human-readable name (e.g. "weather → WeatherSummary")';
+          tmpForm.appendChild(tmpNameLbl);
+          tmpForm.appendChild(tmpNameInput);
+          let tmpScopeLbl = document.createElement('label');
+          tmpScopeLbl.textContent = 'Scope';
+          let tmpScopeInput = document.createElement('input');
+          tmpScopeInput.type = 'text';
+          tmpScopeInput.value = tmpRec.Scope || '';
+          tmpScopeInput.placeholder = '(empty = global)';
+          tmpForm.appendChild(tmpScopeLbl);
+          tmpForm.appendChild(tmpScopeInput);
+          let tmpDescLbl = document.createElement('label');
+          tmpDescLbl.textContent = 'Description';
+          let tmpDescInput = document.createElement('input');
+          tmpDescInput.type = 'text';
+          tmpDescInput.value = tmpRec.Description || '';
+          tmpForm.appendChild(tmpDescLbl);
+          tmpForm.appendChild(tmpDescInput);
+          let tmpSTLbl = document.createElement('label');
+          tmpSTLbl.textContent = 'Source ↔ Target';
+          let tmpST = document.createElement('div');
+          tmpST.className = 'psm-source-target';
+          let tmpSrc = this._buildSTSection('Source', ['SourceBeaconName', 'SourceConnectionHash', 'SourceEntity'], ['Beacon', 'Connection', 'Entity'], [tmpRec.SourceBeaconName, tmpRec.SourceConnectionHash, tmpRec.SourceEntity]);
+          let tmpTgt = this._buildSTSection('Target', ['TargetBeaconName', 'TargetConnectionHash', 'TargetEntity'], ['Beacon', 'Connection', 'Entity'], [tmpRec.TargetBeaconName, tmpRec.TargetConnectionHash, tmpRec.TargetEntity]);
+          tmpST.appendChild(tmpSrc.section);
+          tmpST.appendChild(tmpTgt.section);
+          tmpForm.appendChild(tmpSTLbl);
+          tmpForm.appendChild(tmpST);
+          let tmpConfLbl = document.createElement('label');
+          tmpConfLbl.textContent = 'Configuration (JSON)';
+          let tmpConfWrap = document.createElement('div');
+
+          // Phase C: source-column discovery. "Discover columns" calls the
+          // data-mapper bridge, which dispatches Introspect through UV
+          // to the source beacon and returns the chosen entity's columns.
+          // Each column renders as a chip; clicking inserts a {~D:Record.X~}
+          // template snippet at the textarea's caret. Cuts the typing
+          // without trying to be a full visual mapper.
+          let tmpDiscoverBar = document.createElement('div');
+          tmpDiscoverBar.className = 'psm-discover-bar';
+          let tmpDiscoverBtn = document.createElement('a');
+          tmpDiscoverBtn.className = 'psm-btn psm-btn-secondary';
+          tmpDiscoverBtn.href = 'javascript:void(0)';
+          tmpDiscoverBtn.textContent = '⌕ Discover source columns';
+          tmpDiscoverBtn.title = 'Introspect the source beacon for the columns of the selected source Entity.';
+          tmpDiscoverBar.appendChild(tmpDiscoverBtn);
+          let tmpDiscoverStatus = document.createElement('span');
+          tmpDiscoverStatus.className = 'psm-discover-status';
+          tmpDiscoverStatus.style.marginLeft = '8px';
+          tmpDiscoverStatus.style.fontSize = '12px';
+          tmpDiscoverStatus.style.color = '#94a3b8';
+          tmpDiscoverBar.appendChild(tmpDiscoverStatus);
+          tmpConfWrap.appendChild(tmpDiscoverBar);
+          let tmpChipBar = document.createElement('div');
+          tmpChipBar.className = 'psm-chip-bar';
+          tmpChipBar.style.display = 'none';
+          tmpConfWrap.appendChild(tmpChipBar);
+          let tmpConfTA = document.createElement('textarea');
+          tmpConfTA.spellcheck = false;
+          tmpConfTA.value = tmpConfText;
+          tmpDiscoverBtn.onclick = () => {
+            let tmpBN = tmpSrc.values()[0];
+            let tmpCH = tmpSrc.values()[1];
+            let tmpEN = tmpSrc.values()[2];
+            if (!tmpBN || !tmpCH || !tmpEN) {
+              tmpDiscoverStatus.textContent = 'fill source Beacon, Connection, Entity first';
+              tmpDiscoverStatus.style.color = '#fbbf24';
+              return;
+            }
+            tmpDiscoverStatus.textContent = 'introspecting…';
+            tmpDiscoverStatus.style.color = '#94a3b8';
+            tmpChipBar.innerHTML = '';
+            tmpChipBar.style.display = 'none';
+            this._API.listSourceColumns(tmpBN, tmpCH, tmpEN).then(pResult => {
+              let tmpCols = pResult && pResult.Columns || [];
+              if (tmpCols.length === 0) {
+                tmpDiscoverStatus.textContent = 'no columns returned';
+                tmpDiscoverStatus.style.color = '#fbbf24';
+                return;
+              }
+              tmpDiscoverStatus.textContent = 'click a chip to insert {~D:Record.<col>~} at the cursor';
+              tmpDiscoverStatus.style.color = '#86efac';
+              tmpChipBar.style.display = 'flex';
+              for (let i = 0; i < tmpCols.length; i++) {
+                let tmpCol = tmpCols[i];
+                let tmpChip = document.createElement('a');
+                tmpChip.className = 'psm-chip';
+                tmpChip.href = 'javascript:void(0)';
+                tmpChip.textContent = tmpCol.Name + (tmpCol.DataType ? ' :' + tmpCol.DataType : '');
+                tmpChip.title = 'Insert "' + tmpCol.Name + '": "{~D:Record.' + tmpCol.Name + '~}", at cursor';
+                tmpChip.onclick = () => {
+                  let tmpSnippet = '"' + tmpCol.Name + '": "{~D:Record.' + tmpCol.Name + '~}",';
+                  let tmpStart = tmpConfTA.selectionStart || 0;
+                  let tmpEnd = tmpConfTA.selectionEnd || 0;
+                  let tmpVal = tmpConfTA.value;
+                  tmpConfTA.value = tmpVal.slice(0, tmpStart) + tmpSnippet + tmpVal.slice(tmpEnd);
+                  let tmpCaret = tmpStart + tmpSnippet.length;
+                  tmpConfTA.focus();
+                  tmpConfTA.setSelectionRange(tmpCaret, tmpCaret);
+                };
+                tmpChipBar.appendChild(tmpChip);
+              }
+            }).catch(pErr => {
+              tmpDiscoverStatus.textContent = 'failed: ' + pErr.message;
+              tmpDiscoverStatus.style.color = '#fca5a5';
+            });
+          };
+          let tmpConfHelp = document.createElement('div');
+          tmpConfHelp.className = 'psm-help';
+          tmpConfHelp.innerHTML = 'meadow-integration shape: <code>{ Entity, GUIDName, GUIDTemplate, Mappings: { TargetField: "{~D:Record.SourceField~}" }, Solvers }</code>.';
+          tmpConfWrap.appendChild(tmpConfTA);
+          tmpConfWrap.appendChild(tmpConfHelp);
+          tmpForm.appendChild(tmpConfLbl);
+          tmpForm.appendChild(tmpConfWrap);
+          tmpWrap.appendChild(tmpForm);
+          let tmpErrBox = document.createElement('div');
+          tmpErrBox.className = 'psm-editor-error';
+          tmpErrBox.style.display = 'none';
+          tmpWrap.appendChild(tmpErrBox);
+          let tmpActions = document.createElement('div');
+          tmpActions.className = 'psm-editor-actions';
+          let tmpCancel = document.createElement('a');
+          tmpCancel.className = 'psm-btn';
+          tmpCancel.textContent = 'Cancel';
+          tmpCancel.href = 'javascript:void(0)';
+          tmpCancel.onclick = () => this.openList();
+          tmpActions.appendChild(tmpCancel);
+          let tmpSave = document.createElement('a');
+          tmpSave.className = 'psm-btn psm-btn-primary';
+          tmpSave.textContent = tmpIsNew ? 'Create mapping' : 'Save changes';
+          tmpSave.href = 'javascript:void(0)';
+          tmpSave.onclick = () => {
+            let tmpName = tmpNameInput.value.trim();
+            if (!tmpName) {
+              this._showEditorError(tmpErrBox, 'Name is required.');
+              return;
+            }
+            let tmpConfRaw = tmpConfTA.value;
+            let tmpConfParsed;
+            try {
+              tmpConfParsed = JSON.parse(tmpConfRaw);
+            } catch (pErr) {
+              this._showEditorError(tmpErrBox, 'Configuration JSON parse error: ' + pErr.message);
+              return;
+            }
+            let tmpRecord = {
+              Name: tmpName,
+              Scope: tmpScopeInput.value.trim(),
+              Description: tmpDescInput.value,
+              SourceBeaconName: tmpSrc.values()[0],
+              SourceConnectionHash: tmpSrc.values()[1],
+              SourceEntity: tmpSrc.values()[2],
+              TargetBeaconName: tmpTgt.values()[0],
+              TargetConnectionHash: tmpTgt.values()[1],
+              TargetEntity: tmpTgt.values()[2],
+              MappingConfiguration: tmpConfParsed
+            };
+            if (!tmpIsNew && tmpRec.IDMappingConfig) tmpRecord.IDMappingConfig = tmpRec.IDMappingConfig;
+            tmpSave.textContent = 'Saving…';
+            this._API.saveMapping(tmpRecord).then(() => {
+              this._toast(tmpIsNew ? 'Mapping created.' : 'Mapping saved.', 'success');
+              this.openList();
+            }).catch(pErr => {
+              tmpSave.textContent = tmpIsNew ? 'Create mapping' : 'Save changes';
+              this._showEditorError(tmpErrBox, pErr.message);
+            });
+          };
+          tmpActions.appendChild(tmpSave);
+          tmpWrap.appendChild(tmpActions);
+          pHost.appendChild(tmpWrap);
+        }
+        _buildSTSection(pTitle, pFieldNames, pLabels, pValues) {
+          let tmpSection = document.createElement('div');
+          tmpSection.className = 'psm-st-section';
+          let tmpHead = document.createElement('h4');
+          tmpHead.textContent = pTitle;
+          tmpSection.appendChild(tmpHead);
+          let tmpInputs = [];
+          for (let i = 0; i < pFieldNames.length; i++) {
+            let tmpRow = document.createElement('div');
+            tmpRow.className = 'psm-st-row';
+            let tmpLabel = document.createElement('label');
+            tmpLabel.textContent = pLabels[i];
+            let tmpInput = document.createElement('input');
+            tmpInput.type = 'text';
+            tmpInput.value = pValues[i] || '';
+            tmpInput.placeholder = pFieldNames[i];
+            tmpRow.appendChild(tmpLabel);
+            tmpRow.appendChild(tmpInput);
+            tmpSection.appendChild(tmpRow);
+            tmpInputs.push(tmpInput);
+          }
+          return {
+            section: tmpSection,
+            values: () => tmpInputs.map(i => i.value.trim())
+          };
+        }
+        _showEditorError(pBox, pMsg) {
+          pBox.textContent = pMsg;
+          pBox.style.display = '';
+        }
+      }
+      PictSectionMapping.default_configuration = Object.assign({}, libDefaultConf, {
+        Templates: [{
+          Hash: 'Pict-Section-Mapping-Shell',
+          Template: '<div class="psm-shell-anchor"></div>'
+        }],
+        Renderables: [{
+          RenderableHash: 'Pict-Section-Mapping-Shell',
+          TemplateHash: 'Pict-Section-Mapping-Shell',
+          ContentDestinationAddress: libDefaultConf.DefaultDestinationAddress
+        }]
+      });
+      module.exports = PictSectionMapping;
+      module.exports.default_configuration = PictSectionMapping.default_configuration;
+      module.exports.APIProvider = libAPIProvider;
+    }, {
+      "./Pict-Section-Mapping-CSS.js": 10,
+      "./Pict-Section-Mapping-DefaultConfiguration.js": 11,
+      "./providers/PictProvider-Mapping-API.js": 13,
+      "pict-view": 32
+    }],
+    13: [function (require, module, exports) {
+      /**
+       * Pict-Section-Mapping API Provider
+       *
+       * REST client for the data-mapper /mapper/mappings* surface.
+       * Uses the same active-scope localStorage key as the dashboard
+       * and operation sections so a host mounting any combination
+       * of them gets one coherent active scope.
+       */
+      'use strict';
+
+      const SCOPE_STORAGE_KEY = 'retold.dataMapper.activeScope';
+      class MappingAPIProvider {
+        constructor(pOptions) {
+          let tmpOptions = pOptions || {};
+          this._apiBaseUrl = tmpOptions.APIBaseUrl || '/mapper';
+          this._scopeOverride = typeof tmpOptions.Scope === 'string' ? tmpOptions.Scope : null;
+        }
+        getScope(pCallScope) {
+          if (typeof pCallScope === 'string') return pCallScope;
+          if (typeof this._scopeOverride === 'string') return this._scopeOverride;
+          if (typeof localStorage !== 'undefined') {
+            let tmpStored = localStorage.getItem(SCOPE_STORAGE_KEY);
+            if (tmpStored !== null) return tmpStored;
+          }
+          return '';
+        }
+        setScope(pScope) {
+          if (typeof localStorage !== 'undefined') {
+            if (pScope) localStorage.setItem(SCOPE_STORAGE_KEY, pScope);else localStorage.removeItem(SCOPE_STORAGE_KEY);
+          }
+          this._scopeOverride = typeof pScope === 'string' ? pScope : null;
+        }
+        _fetch(pMethod, pPath, pBody) {
+          let tmpOpts = {
+            method: pMethod,
+            headers: {}
+          };
+          if (pBody !== undefined && pBody !== null) {
+            tmpOpts.headers['Content-Type'] = 'application/json';
+            tmpOpts.body = JSON.stringify(pBody);
+          }
+          return fetch(this._apiBaseUrl + pPath, tmpOpts).then(pRes => {
+            if (!pRes.ok) {
+              return pRes.text().then(pText => {
+                let tmpMsg = pText && pText.length < 400 ? pText : 'HTTP ' + pRes.status;
+                throw new Error(tmpMsg);
+              });
+            }
+            let tmpCT = pRes.headers.get('content-type') || '';
+            if (tmpCT.indexOf('application/json') === 0) return pRes.json();
+            return pRes.text();
+          });
+        }
+        _scopeQuery(pScope) {
+          let tmpScope = this.getScope(pScope);
+          if (tmpScope === '') return '';
+          return '?scope=' + encodeURIComponent(tmpScope);
+        }
+        listMappings(pScope) {
+          return this._fetch('GET', '/mappings' + this._scopeQuery(pScope));
+        }
+        saveMapping(pRecord, pScope) {
+          let tmpRecord = Object.assign({}, pRecord);
+          if (tmpRecord.Scope === undefined) tmpRecord.Scope = this.getScope(pScope);
+          if (tmpRecord.IDMappingConfig) {
+            let tmpID = tmpRecord.IDMappingConfig;
+            delete tmpRecord.IDMappingConfig;
+            return this._fetch('PUT', '/mapping/' + tmpID, tmpRecord);
+          }
+          return this._fetch('POST', '/mappings', tmpRecord);
+        }
+        deleteMapping(pID) {
+          return this._fetch('DELETE', '/mapping/' + pID);
+        }
+
+        // Phase B "glue": compile this mapping into an Ultravisor Operation,
+        // POST it to UV, trigger via the queue, and return the manifest summary.
+        // Server side does the compile + post + trigger; UI just renders the result.
+        runViaUltravisor(pID) {
+          return this._fetch('POST', '/uv/run-mapping/' + pID, {});
+        }
+
+        // Phase C: introspection-driven authoring. Fetch the columns for one
+        // entity on a source beacon so the editor can render them as
+        // click-to-insert chips. Server handles the hash→ID resolution.
+        listSourceColumns(pBeaconName, pConnectionHash, pEntity) {
+          let tmpQuery = '?ConnectionHash=' + encodeURIComponent(pConnectionHash) + '&Entity=' + encodeURIComponent(pEntity);
+          return this._fetch('GET', '/beacon/' + encodeURIComponent(pBeaconName) + '/columns' + tmpQuery);
+        }
+      }
+      module.exports = MappingAPIProvider;
+      module.exports.SCOPE_STORAGE_KEY = SCOPE_STORAGE_KEY;
+    }, {}],
+    14: [function (require, module, exports) {
+      /**
+       * DataMapper BeaconBrowser View
+       *
+       * Two side-by-side selector rows (source + target): beacon → connection →
+       * entity dropdowns. Dispatches happen via the MapperAPI provider; this view
+       * just reads state and emits click/change events.
+       */
+      const libPictView = require('pict-view');
+      const _ViewConfiguration = {
+        ViewIdentifier: 'Mapper-BeaconBrowser',
+        DefaultRenderable: 'Mapper-BeaconBrowser-Content',
+        DefaultDestinationAddress: '#DataMapper-BeaconBrowser-Slot',
+        AutoRender: false,
+        CSS: /*css*/`
+			.beacon-browser { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
+			.bb-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+			.bb-row:last-child { margin-bottom: 0; }
+			.bb-label { width: 64px; color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+			.bb-divider { height: 1px; background: #30363d; margin: 10px 0; }
+		`,
+        Templates: [{
+          Hash: 'Mapper-BeaconBrowser-Template',
+          Template: /*html*/`
+<div class="beacon-browser">
+	<div class="mapper-section-title">Beacon &amp; Entity Selection</div>
+	<div class="bb-row">
+		<span class="bb-label">Source</span>
+		<select id="DataMapper-Source-Beacon">
+			<option value="">— beacon —</option>
+			{~TS:Mapper-BeaconBrowser-BeaconOpt:AppData.Mapper.SourceBeacons~}
+		</select>
+		<select id="DataMapper-Source-Connection">
+			<option value="">— connection —</option>
+			{~TS:Mapper-BeaconBrowser-ConnOpt:AppData.Mapper.SourceConnectionsForTemplate~}
+		</select>
+		<select id="DataMapper-Source-Entity">
+			<option value="">— entity —</option>
+			{~TS:Mapper-BeaconBrowser-EntityOpt:AppData.Mapper.SourceEntitiesForTemplate~}
+		</select>
+	</div>
+	<div class="bb-divider"></div>
+	<div class="bb-row">
+		<span class="bb-label">Target</span>
+		<select id="DataMapper-Target-Beacon">
+			<option value="">— beacon —</option>
+			{~TS:Mapper-BeaconBrowser-BeaconOpt:AppData.Mapper.TargetBeacons~}
+		</select>
+		<select id="DataMapper-Target-Connection">
+			<option value="">— connection —</option>
+			{~TS:Mapper-BeaconBrowser-ConnOpt:AppData.Mapper.TargetConnectionsForTemplate~}
+		</select>
+		<select id="DataMapper-Target-Entity">
+			<option value="">— entity —</option>
+			{~TS:Mapper-BeaconBrowser-EntityOpt:AppData.Mapper.TargetEntitiesForTemplate~}
+		</select>
+	</div>
+</div>`
+        }, {
+          Hash: 'Mapper-BeaconBrowser-BeaconOpt',
+          Template: /*html*/`<option value="{~D:Record.Name~}" {~D:Record.SelectedAttr~}>{~D:Record.Name~}</option>`
+        }, {
+          Hash: 'Mapper-BeaconBrowser-ConnOpt',
+          Template: /*html*/`<option value="{~D:Record.IDBeaconConnection~}" {~D:Record.SelectedAttr~}>#{~D:Record.IDBeaconConnection~} {~D:Record.Name~} ({~D:Record.Type~})</option>`
+        }, {
+          Hash: 'Mapper-BeaconBrowser-EntityOpt',
+          Template: /*html*/`<option value="{~D:Record.TableName~}" {~D:Record.SelectedAttr~}>{~D:Record.TableName~} ({~D:Record.ColumnCount~} cols)</option>`
+        }],
+        Renderables: [{
+          RenderableHash: 'Mapper-BeaconBrowser-Content',
+          TemplateHash: 'Mapper-BeaconBrowser-Template',
+          ContentDestinationAddress: '#DataMapper-BeaconBrowser-Slot',
+          RenderMethod: 'replace'
+        }]
+      };
+      class PictViewMapperBeaconBrowser extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+        }
+        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
+          let tmpProvider = this.pict.providers.MapperAPI;
+          let fBindChange = (pSelector, fHandler) => {
+            let tmpEl = this.pict.ContentAssignment.getElement(pSelector);
+            if (tmpEl && tmpEl.length) tmpEl[0].addEventListener('change', fHandler);
+          };
+          fBindChange('#DataMapper-Source-Beacon', pEvent => {
+            tmpProvider.loadSourceConnections(pEvent.target.value);
+          });
+          fBindChange('#DataMapper-Source-Connection', pEvent => {
+            let tmpID = parseInt(pEvent.target.value, 10);
+            if (tmpID) {
+              tmpProvider.introspectSource(tmpID);
+            }
+          });
+          fBindChange('#DataMapper-Source-Entity', pEvent => {
+            tmpProvider.setSourceEntity(pEvent.target.value);
+          });
+          fBindChange('#DataMapper-Target-Beacon', pEvent => {
+            tmpProvider.loadTargetConnections(pEvent.target.value);
+          });
+          fBindChange('#DataMapper-Target-Connection', pEvent => {
+            let tmpID = parseInt(pEvent.target.value, 10);
+            if (tmpID) {
+              tmpProvider.introspectTarget(tmpID);
+            }
+          });
+          fBindChange('#DataMapper-Target-Entity', pEvent => {
+            tmpProvider.setTargetEntity(pEvent.target.value);
+          });
+          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+        }
+      }
+      module.exports = PictViewMapperBeaconBrowser;
+      module.exports.default_configuration = _ViewConfiguration;
+    }, {
+      "pict-view": 32
+    }],
+    15: [function (require, module, exports) {
+      /**
+       * DataMapper FieldMapper View
+       *
+       * Three-column layout: source fields | mappings | target fields. Click a
+       * source field, then click a target field, to create a mapping. Drag+drop
+       * from source to target works too.
+       */
+      const libPictView = require('pict-view');
+      const _ViewConfiguration = {
+        ViewIdentifier: 'Mapper-FieldMapper',
+        DefaultRenderable: 'Mapper-FieldMapper-Content',
+        DefaultDestinationAddress: '#DataMapper-FieldMapper-Slot',
+        AutoRender: false,
+        CSS: /*css*/`
+			.field-mapper { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 10px; min-height: 360px; }
+			.fm-panel { background: #161b22; border: 1px solid #30363d; border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; }
+			.fm-panel-header { padding: 10px 12px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+			.fm-panel-body { flex: 1; overflow: auto; padding: 8px; }
+			.fm-field { background: #0d1117; border: 1px solid #30363d; padding: 6px 10px; border-radius: 4px; margin-bottom: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 13px; user-select: none; }
+			.fm-field:hover { border-color: #484f58; }
+			.fm-field.selected { border-color: #ff9800; background: #2d1f00; }
+			.fm-field.mapped { border-color: #3fb950; }
+			.fm-field .fm-type { color: #8b949e; font-size: 11px; }
+			.fm-empty { color: #8b949e; padding: 16px; text-align: center; font-style: italic; font-size: 13px; }
+			.fm-mapping-drop { border: 1px dashed #30363d; border-radius: 4px; padding: 10px; text-align: center; color: #8b949e; margin: 0 8px 8px 8px; font-size: 12px; }
+			.fm-mapping-drop.active { border-color: #ff9800; color: #ff9800; background: #1a140a; }
+			.fm-mapping-row { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 6px; align-items: center; padding: 6px 10px; margin-bottom: 4px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; font-size: 13px; }
+			.fm-arrow { color: #ff9800; font-weight: bold; }
+			.fm-remove { background: transparent; border: 0; color: #da3633; cursor: pointer; font-size: 16px; padding: 0 4px; }
+			.fm-footer { padding: 8px 12px; border-top: 1px solid #30363d; display: flex; gap: 6px; align-items: center; }
+		`,
+        Templates: [{
+          Hash: 'Mapper-FieldMapper-Template',
+          Template: /*html*/`
+<div class="field-mapper">
+	<div class="fm-panel">
+		<div class="fm-panel-header">Source Fields <span>{~D:AppData.Mapper.SourceFieldCount~}</span></div>
+		<div class="fm-panel-body" id="DataMapper-SourceFields-List">
+			{~TS:Mapper-FieldMapper-SourceField:AppData.Mapper.SourceFieldsForTemplate~}
+			{~D:AppData.Mapper.SourceEmptyHTML~}
+		</div>
+	</div>
+	<div class="fm-panel">
+		<div class="fm-panel-header">Field Mappings <span>{~D:AppData.Mapper.MappingCount~}</span></div>
+		<div class="fm-mapping-drop {~D:AppData.Mapper.DropZoneClass~}">{~D:AppData.Mapper.DropZoneText~}</div>
+		<div class="fm-panel-body" id="DataMapper-Mapping-List">
+			{~TS:Mapper-FieldMapper-MappingRow:AppData.Mapper.MappingsForTemplate~}
+		</div>
+		<div class="fm-footer">
+			<button class="btn primary" id="DataMapper-Save-Mapping">Save Mapping</button>
+			<button class="btn" id="DataMapper-Clear-Mappings">Clear All</button>
+		</div>
+	</div>
+	<div class="fm-panel">
+		<div class="fm-panel-header">Target Fields <span>{~D:AppData.Mapper.TargetFieldCount~}</span></div>
+		<div class="fm-panel-body" id="DataMapper-TargetFields-List">
+			{~TS:Mapper-FieldMapper-TargetField:AppData.Mapper.TargetFieldsForTemplate~}
+			{~D:AppData.Mapper.TargetEmptyHTML~}
+		</div>
+	</div>
+</div>`
+        }, {
+          Hash: 'Mapper-FieldMapper-SourceField',
+          Template: /*html*/`<div class="fm-field {~D:Record.SelectedClass~}" data-source-field="{~D:Record.Name~}" draggable="true"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
+        }, {
+          Hash: 'Mapper-FieldMapper-TargetField',
+          Template: /*html*/`<div class="fm-field {~D:Record.MappedClass~}" data-target-field="{~D:Record.Name~}"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
+        }, {
+          Hash: 'Mapper-FieldMapper-MappingRow',
+          Template: /*html*/`<div class="fm-mapping-row"><span>{~D:Record.Source~}</span><span class="fm-arrow">&rarr;</span><span>{~D:Record.Target~}</span><button class="fm-remove" data-remove-mapping="{~D:Record.Index~}">&times;</button></div>`
+        }],
+        Renderables: [{
+          RenderableHash: 'Mapper-FieldMapper-Content',
+          TemplateHash: 'Mapper-FieldMapper-Template',
+          ContentDestinationAddress: '#DataMapper-FieldMapper-Slot',
+          RenderMethod: 'replace'
+        }]
+      };
+      class PictViewMapperFieldMapper extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+        }
+        onBeforeRender(pRenderable) {
+          let tmpState = this.pict.AppData.Mapper;
+          let tmpSelected = tmpState.SelectedSourceField || '';
+          let tmpSources = tmpState.SourceFields || [];
+          tmpState.SourceFieldCount = `${tmpSources.length} field${tmpSources.length === 1 ? '' : 's'}`;
+          tmpState.SourceFieldsForTemplate = tmpSources.map(pF => ({
+            Name: pF.Name,
+            Type: pF.Type || '',
+            SelectedClass: pF.Name === tmpSelected ? 'selected' : ''
+          }));
+          tmpState.SourceEmptyHTML = tmpSources.length === 0 ? '<div class="fm-empty">Pick a source beacon, connection, and entity above.</div>' : '';
+          let tmpMappings = tmpState.Mappings || [];
+          let tmpMappedTargets = {};
+          for (let i = 0; i < tmpMappings.length; i++) {
+            tmpMappedTargets[tmpMappings[i].Target] = true;
+          }
+          let tmpTargets = tmpState.TargetFields || [];
+          tmpState.TargetFieldCount = `${tmpTargets.length} field${tmpTargets.length === 1 ? '' : 's'}`;
+          tmpState.TargetFieldsForTemplate = tmpTargets.map(pF => ({
+            Name: pF.Name,
+            Type: pF.Type || '',
+            MappedClass: tmpMappedTargets[pF.Name] ? 'mapped' : ''
+          }));
+          tmpState.TargetEmptyHTML = tmpTargets.length === 0 ? '<div class="fm-empty">Pick a target beacon, connection, and entity above.</div>' : '';
+          tmpState.MappingCount = `${tmpMappings.length} mapping${tmpMappings.length === 1 ? '' : 's'}`;
+          tmpState.MappingsForTemplate = tmpMappings.map((pM, pIdx) => ({
+            Source: pM.Source,
+            Target: pM.Target,
+            Index: pIdx
+          }));
+          if (tmpSelected) {
+            tmpState.DropZoneClass = 'active';
+            tmpState.DropZoneText = `Source "${tmpSelected}" selected — click a target field to map it`;
+          } else {
+            tmpState.DropZoneClass = '';
+            tmpState.DropZoneText = 'Click a source field, then click a target field';
+          }
+          return super.onBeforeRender(pRenderable);
+        }
+        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
+          let tmpProvider = this.pict.providers.MapperAPI;
+          let tmpSelf = this;
+          let tmpSourceFields = this.pict.ContentAssignment.getElement('[data-source-field]');
+          if (tmpSourceFields && tmpSourceFields.length) {
+            for (let i = 0; i < tmpSourceFields.length; i++) {
+              let tmpEl = tmpSourceFields[i];
+              tmpEl.addEventListener('click', pEvent => {
+                tmpProvider.selectSourceField(pEvent.currentTarget.getAttribute('data-source-field'));
+              });
+              tmpEl.addEventListener('dragstart', pEvent => {
+                let tmpName = pEvent.currentTarget.getAttribute('data-source-field');
+                pEvent.dataTransfer.setData('text/plain', tmpName);
+                tmpProvider.pict.AppData.Mapper.SelectedSourceField = tmpName;
+              });
+            }
+          }
+          let tmpTargetFields = this.pict.ContentAssignment.getElement('[data-target-field]');
+          if (tmpTargetFields && tmpTargetFields.length) {
+            for (let i = 0; i < tmpTargetFields.length; i++) {
+              let tmpEl = tmpTargetFields[i];
+              tmpEl.addEventListener('click', pEvent => {
+                let tmpTarget = pEvent.currentTarget.getAttribute('data-target-field');
+                let tmpSource = tmpSelf.pict.AppData.Mapper.SelectedSourceField;
+                if (tmpSource && tmpTarget) {
+                  tmpProvider.addMapping(tmpSource, tmpTarget);
+                }
+              });
+              tmpEl.addEventListener('dragover', pEvent => pEvent.preventDefault());
+              tmpEl.addEventListener('drop', pEvent => {
+                pEvent.preventDefault();
+                let tmpSource = pEvent.dataTransfer.getData('text/plain');
+                let tmpTarget = pEvent.currentTarget.getAttribute('data-target-field');
+                if (tmpSource && tmpTarget) {
+                  tmpProvider.addMapping(tmpSource, tmpTarget);
+                }
+              });
+            }
+          }
+          let tmpRemoveBtns = this.pict.ContentAssignment.getElement('[data-remove-mapping]');
+          if (tmpRemoveBtns && tmpRemoveBtns.length) {
+            for (let i = 0; i < tmpRemoveBtns.length; i++) {
+              tmpRemoveBtns[i].addEventListener('click', pEvent => {
+                let tmpIndex = parseInt(pEvent.currentTarget.getAttribute('data-remove-mapping'), 10);
+                tmpProvider.removeMapping(tmpIndex);
+              });
+            }
+          }
+          let tmpSaveBtn = this.pict.ContentAssignment.getElement('#DataMapper-Save-Mapping');
+          if (tmpSaveBtn && tmpSaveBtn.length) {
+            tmpSaveBtn[0].addEventListener('click', () => tmpProvider.saveMapping());
+          }
+          let tmpClearBtn = this.pict.ContentAssignment.getElement('#DataMapper-Clear-Mappings');
+          if (tmpClearBtn && tmpClearBtn.length) {
+            tmpClearBtn[0].addEventListener('click', () => tmpProvider.clearMappings());
+          }
+          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+        }
+      }
+      module.exports = PictViewMapperFieldMapper;
+      module.exports.default_configuration = _ViewConfiguration;
+    }, {
+      "pict-view": 32
+    }],
+    16: [function (require, module, exports) {
+      /**
+       * DataMapper JSONEditor View
+       *
+       * Dual-mode config editor: shows the generated MappingConfiguration JSON
+       * and supports import via paste, file picker, or drag-drop onto the textarea.
+       */
+      const libPictView = require('pict-view');
+      const _ViewConfiguration = {
+        ViewIdentifier: 'Mapper-JSONEditor',
+        DefaultRenderable: 'Mapper-JSONEditor-Content',
+        DefaultDestinationAddress: '#DataMapper-JSONEditor-Slot',
+        AutoRender: false,
+        CSS: /*css*/`
+			.json-editor { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; }
+			.json-editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+			.json-editor-header h2 { margin: 0; font-size: 14px; font-weight: 600; color: #e6edf3; }
+			.json-editor-actions { display: flex; gap: 6px; }
+			.json-editor textarea { width: 100%; min-height: 360px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; font-family: 'Menlo', 'Monaco', 'Consolas', monospace; font-size: 12px; padding: 10px; resize: vertical; }
+			.json-editor textarea.drop-active { border-color: #ff9800; }
+		`,
+        Templates: [{
+          Hash: 'Mapper-JSONEditor-Template',
+          Template: /*html*/`
+<div class="json-editor">
+	<div class="json-editor-header">
+		<h2>MappingConfiguration JSON</h2>
+		<div class="json-editor-actions">
+			<button class="btn" id="DataMapper-JSON-Regenerate">Regenerate</button>
+			<button class="btn" id="DataMapper-JSON-Apply">Apply to Editor</button>
+			<button class="btn" id="DataMapper-JSON-Copy">Copy</button>
+			<button class="btn" id="DataMapper-JSON-Upload">Upload…</button>
+			<input type="file" id="DataMapper-JSON-File" accept=".json" style="display:none">
+		</div>
+	</div>
+	<textarea id="DataMapper-JSON-Text" placeholder='{ "Entity":"MyEntity", "Mappings":{...} }'>{~D:AppData.Mapper.JSONText~}</textarea>
+</div>`
+        }],
+        Renderables: [{
+          RenderableHash: 'Mapper-JSONEditor-Content',
+          TemplateHash: 'Mapper-JSONEditor-Template',
+          ContentDestinationAddress: '#DataMapper-JSONEditor-Slot',
+          RenderMethod: 'replace'
+        }]
+      };
+      class PictViewMapperJSONEditor extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+        }
+        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
+          let tmpProvider = this.pict.providers.MapperAPI;
+          let tmpSelf = this;
+          let tmpTextareaEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Text');
+          let tmpTextarea = tmpTextareaEl && tmpTextareaEl.length ? tmpTextareaEl[0] : null;
+          let tmpRegenBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Regenerate');
+          if (tmpRegenBtn && tmpRegenBtn.length) {
+            tmpRegenBtn[0].addEventListener('click', () => {
+              tmpProvider._regenerateJSON();
+              if (tmpTextarea) tmpTextarea.value = tmpSelf.pict.AppData.Mapper.JSONText;
+            });
+          }
+          let tmpApplyBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Apply');
+          if (tmpApplyBtn && tmpApplyBtn.length) {
+            tmpApplyBtn[0].addEventListener('click', () => {
+              if (tmpTextarea) tmpProvider.applyJSONText(tmpTextarea.value);
+            });
+          }
+          let tmpCopyBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Copy');
+          if (tmpCopyBtn && tmpCopyBtn.length) {
+            tmpCopyBtn[0].addEventListener('click', () => {
+              if (!tmpTextarea) return;
+              try {
+                navigator.clipboard.writeText(tmpTextarea.value);
+                tmpSelf.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
+              } catch (e) {
+                tmpTextarea.select();
+                document.execCommand('copy');
+                tmpSelf.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
+              }
+              if (tmpSelf.pict.views['Mapper-Layout']) tmpSelf.pict.views['Mapper-Layout'].render();
+            });
+          }
+          let tmpUploadBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Upload');
+          let tmpFileInputEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-File');
+          let tmpFileInput = tmpFileInputEl && tmpFileInputEl.length ? tmpFileInputEl[0] : null;
+          if (tmpUploadBtn && tmpUploadBtn.length && tmpFileInput) {
+            tmpUploadBtn[0].addEventListener('click', () => tmpFileInput.click());
+            tmpFileInput.addEventListener('change', pEvent => {
+              let tmpFile = pEvent.target.files[0];
+              if (!tmpFile) return;
+              let tmpReader = new FileReader();
+              tmpReader.onload = pLoadEvent => {
+                if (tmpTextarea) tmpTextarea.value = pLoadEvent.target.result;
+                tmpProvider.applyJSONText(pLoadEvent.target.result);
+              };
+              tmpReader.readAsText(tmpFile);
+              pEvent.target.value = '';
+            });
+          }
+          if (tmpTextarea) {
+            tmpTextarea.addEventListener('dragover', pEvent => {
+              pEvent.preventDefault();
+              tmpTextarea.classList.add('drop-active');
+            });
+            tmpTextarea.addEventListener('dragleave', () => tmpTextarea.classList.remove('drop-active'));
+            tmpTextarea.addEventListener('drop', pEvent => {
+              pEvent.preventDefault();
+              tmpTextarea.classList.remove('drop-active');
+              let tmpFiles = pEvent.dataTransfer.files;
+              if (tmpFiles && tmpFiles.length > 0) {
+                let tmpReader = new FileReader();
+                tmpReader.onload = pLoadEvent => {
+                  tmpTextarea.value = pLoadEvent.target.result;
+                  tmpProvider.applyJSONText(pLoadEvent.target.result);
+                };
+                tmpReader.readAsText(tmpFiles[0]);
+              }
+            });
+          }
+          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+        }
+      }
+      module.exports = PictViewMapperJSONEditor;
+      module.exports.default_configuration = _ViewConfiguration;
+    }, {
+      "pict-view": 32
+    }],
+    17: [function (require, module, exports) {
+      /**
+       * DataMapper Layout View
+       *
+       * Shell: header with Ultravisor controls + status, tab bar that switches
+       * between mapper / saved-mappings / JSON panels, and mount-point divs
+       * for the sub-views.
+       */
+      const libPictView = require('pict-view');
+      const _PanelDefs = [{
+        Key: 'mapper',
+        Label: 'Visual Mapper'
+      }, {
+        Key: 'mappings',
+        Label: 'Saved Mappings'
+      }, {
+        Key: 'json',
+        Label: 'JSON Config'
+      }];
+      const _ViewConfiguration = {
+        ViewIdentifier: 'Mapper-Layout',
+        DefaultRenderable: 'Mapper-Layout-Shell',
+        DefaultDestinationAddress: '#DataMapper-App',
+        AutoRender: false,
+        CSS: /*css*/`
+			body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: #0d1117; color: #e6edf3; font-size: 14px; }
+			.mapper-app { display: flex; flex-direction: column; height: 100vh; }
+			.mapper-header { background: #161b22; border-bottom: 1px solid #30363d; padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+			.mapper-header h1 { margin: 0; font-size: 16px; font-weight: 600; color: #ff9800; }
+			.mapper-uv-controls { display: flex; gap: 6px; align-items: center; flex: 1; }
+			.mapper-uv-controls input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 4px; font-size: 13px; min-width: 220px; }
+			.mapper-uv-controls button { background: #238636; color: #fff; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+			.mapper-uv-controls button.secondary { background: #30363d; }
+			.mapper-uv-controls button:hover { filter: brightness(1.15); }
+			.mapper-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+			.badge-neutral { background: #30363d; color: #8b949e; }
+			.badge-success { background: #238636; color: #fff; }
+			.badge-error { background: #da3633; color: #fff; }
+			.badge-info { background: #1f6feb; color: #fff; }
+			.mapper-status { color: #8b949e; font-size: 12px; }
+			.mapper-tabs { background: #161b22; border-bottom: 1px solid #30363d; padding: 0 20px; display: flex; gap: 2px; }
+			.mapper-tab { background: transparent; border: 0; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; }
+			.mapper-tab.active { color: #ff9800; border-bottom-color: #ff9800; }
+			.mapper-tab:hover { color: #e6edf3; }
+			.mapper-main { flex: 1; overflow: auto; padding: 16px 20px; }
+			.mapper-panel { display: none; }
+			.mapper-panel.active { display: block; }
+			.mapper-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #8b949e; margin: 0 0 8px 0; }
+			select, input[type="text"], textarea { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+			select { min-width: 160px; }
+			button.btn { background: #30363d; color: #e6edf3; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+			button.btn.primary { background: #ff9800; color: #0d1117; }
+			button.btn.danger { background: #da3633; color: #fff; }
+			button.btn:hover { filter: brightness(1.15); }
+			button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+		`,
+        Templates: [{
+          Hash: 'Mapper-Layout-Shell',
+          Template: /*html*/`
+<div class="mapper-app">
+	<header class="mapper-header">
+		<h1>Retold Data Mapper</h1>
+		<div class="mapper-uv-controls">
+			<label style="color:#8b949e; font-size:12px;">Ultravisor</label>
+			<input type="text" id="DataMapper-UV-URL" placeholder="http://localhost:8422" value="{~D:AppData.Mapper.UltravisorURL~}">
+			<button id="DataMapper-UV-Connect">Connect</button>
+			<button id="DataMapper-UV-Disconnect" class="secondary">Disconnect</button>
+			<span class="mapper-badge {~D:AppData.Mapper.UltravisorBadgeClass~}">{~D:AppData.Mapper.UltravisorStatusLabel~}</span>
+		</div>
+		<div class="mapper-status">{~D:AppData.Mapper.StatusMessage~}</div>
+	</header>
+	<nav class="mapper-tabs">{~TS:Mapper-Layout-Tab:AppData.Mapper.Tabs~}</nav>
+	<main class="mapper-main">
+		<div id="DataMapper-Panel-mapper" class="mapper-panel">
+			<div id="DataMapper-BeaconBrowser-Slot"></div>
+			<div id="DataMapper-FieldMapper-Slot"></div>
+		</div>
+		<div id="DataMapper-Panel-mappings" class="mapper-panel">
+			<div id="DataMapper-MappingList-Slot"></div>
+		</div>
+		<div id="DataMapper-Panel-json" class="mapper-panel">
+			<div id="DataMapper-JSONEditor-Slot"></div>
+		</div>
+	</main>
+</div>`
+        }, {
+          Hash: 'Mapper-Layout-Tab',
+          Template: /*html*/`<button class="mapper-tab {~D:Record.ActiveClass~}" data-mapper-panel="{~D:Record.Key~}">{~D:Record.Label~}</button>`
+        }],
+        Renderables: [{
+          RenderableHash: 'Mapper-Layout-Shell',
+          TemplateHash: 'Mapper-Layout-Shell',
+          ContentDestinationAddress: '#DataMapper-App',
+          RenderMethod: 'replace'
+        }]
+      };
+      class PictViewMapperLayout extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+        }
+        onBeforeRender(pRenderable) {
+          let tmpActive = this.pict.AppData.Mapper && this.pict.AppData.Mapper.ActivePanel || 'mapper';
+          this.pict.AppData.Mapper.Tabs = _PanelDefs.map(pP => ({
+            Key: pP.Key,
+            Label: pP.Label,
+            ActiveClass: pP.Key === tmpActive ? 'active' : ''
+          }));
+          return super.onBeforeRender(pRenderable);
+        }
+        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
+          let tmpSelf = this;
+          let tmpConnectBtn = this.pict.ContentAssignment.getElement('#DataMapper-UV-Connect');
+          if (tmpConnectBtn && tmpConnectBtn.length) {
+            tmpConnectBtn[0].addEventListener('click', () => {
+              let tmpURLInput = tmpSelf.pict.ContentAssignment.getElement('#DataMapper-UV-URL');
+              let tmpURL = tmpURLInput && tmpURLInput.length ? tmpURLInput[0].value : '';
+              if (!tmpURL) {
+                return;
+              }
+              tmpSelf.pict.providers.MapperAPI.connectUltravisor(tmpURL);
+            });
+          }
+          let tmpDisconnectBtn = this.pict.ContentAssignment.getElement('#DataMapper-UV-Disconnect');
+          if (tmpDisconnectBtn && tmpDisconnectBtn.length) {
+            tmpDisconnectBtn[0].addEventListener('click', () => {
+              tmpSelf.pict.providers.MapperAPI.disconnectUltravisor();
+            });
+          }
+          let tmpTabButtons = this.pict.ContentAssignment.getElement('[data-mapper-panel]');
+          if (tmpTabButtons && tmpTabButtons.length) {
+            for (let i = 0; i < tmpTabButtons.length; i++) {
+              tmpTabButtons[i].addEventListener('click', pEvent => {
+                let tmpKey = pEvent.currentTarget.getAttribute('data-mapper-panel');
+                if (tmpKey) tmpSelf.setActivePanel(tmpKey);
+              });
+            }
+          }
+
+          // Render sub-views into their mount slots.
+          if (this.pict.views['Mapper-BeaconBrowser']) this.pict.views['Mapper-BeaconBrowser'].render();
+          if (this.pict.views['Mapper-FieldMapper']) this.pict.views['Mapper-FieldMapper'].render();
+          if (this.pict.views['Mapper-MappingList']) this.pict.views['Mapper-MappingList'].render();
+          if (this.pict.views['Mapper-JSONEditor']) this.pict.views['Mapper-JSONEditor'].render();
+          this._applyActivePanelVisibility();
+          if (this.pict.CSSMap && typeof this.pict.CSSMap.injectCSS === 'function') {
+            this.pict.CSSMap.injectCSS();
+          }
+          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+        }
+        setActivePanel(pKey) {
+          this.pict.AppData.Mapper.ActivePanel = pKey;
+          this._applyActivePanelVisibility();
+          let tmpTabButtons = this.pict.ContentAssignment.getElement('[data-mapper-panel]');
+          if (tmpTabButtons && tmpTabButtons.length) {
+            for (let i = 0; i < tmpTabButtons.length; i++) {
+              let tmpName = tmpTabButtons[i].getAttribute('data-mapper-panel');
+              if (tmpName === pKey) tmpTabButtons[i].classList.add('active');else tmpTabButtons[i].classList.remove('active');
+            }
+          }
+        }
+        _applyActivePanelVisibility() {
+          let tmpActive = this.pict.AppData.Mapper.ActivePanel || 'mapper';
+          for (let i = 0; i < _PanelDefs.length; i++) {
+            let tmpKey = _PanelDefs[i].Key;
+            let tmpPanelEl = this.pict.ContentAssignment.getElement(`#DataMapper-Panel-${tmpKey}`);
+            if (tmpPanelEl && tmpPanelEl.length) {
+              tmpPanelEl[0].classList.toggle('active', tmpKey === tmpActive);
+            }
+          }
+        }
+      }
+      module.exports = PictViewMapperLayout;
+      module.exports.default_configuration = _ViewConfiguration;
+    }, {
+      "pict-view": 32
+    }],
+    18: [function (require, module, exports) {
+      /**
+       * DataMapper MappingList View
+       *
+       * Lists MappingConfig rows persisted in the mapper's internal SQLite. Click
+       * to load into the editor; × to delete.
+       */
+      const libPictView = require('pict-view');
+      const _ViewConfiguration = {
+        ViewIdentifier: 'Mapper-MappingList',
+        DefaultRenderable: 'Mapper-MappingList-Content',
+        DefaultDestinationAddress: '#DataMapper-MappingList-Slot',
+        AutoRender: false,
+        CSS: /*css*/`
+			.mapping-list { background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+			.ml-header { padding: 10px 16px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+			.ml-header h2 { margin: 0; font-size: 14px; color: #e6edf3; font-weight: 600; }
+			.ml-empty { padding: 16px; text-align: center; color: #8b949e; font-style: italic; }
+			.ml-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #21262d; align-items: center; }
+			.ml-row:last-child { border-bottom: 0; }
+			.ml-row:hover { background: #1c2333; }
+			.ml-name { font-size: 13px; color: #e6edf3; font-weight: 500; }
+			.ml-sub { font-size: 12px; color: #8b949e; }
+		`,
+        Templates: [{
+          Hash: 'Mapper-MappingList-Template',
+          Template: /*html*/`
+<div class="mapping-list">
+	<div class="ml-header">
+		<h2>Saved Mappings</h2>
+		<button class="btn" id="DataMapper-Refresh-Mappings">Refresh</button>
+	</div>
+	{~TS:Mapper-MappingList-Row:AppData.Mapper.SavedMappingsForTemplate~}
+	{~D:AppData.Mapper.SavedMappingsEmptyHTML~}
+</div>`
+        }, {
+          Hash: 'Mapper-MappingList-Row',
+          Template: /*html*/`
+<div class="ml-row">
+	<div>
+		<div class="ml-name">{~D:Record.Name~}</div>
+		<div class="ml-sub">{~D:Record.Subline~}</div>
+	</div>
+	<button class="btn" data-load-mapping="{~D:Record.IDMappingConfig~}">Load</button>
+	<button class="btn danger" data-delete-mapping="{~D:Record.IDMappingConfig~}">&times;</button>
+</div>`
+        }],
+        Renderables: [{
+          RenderableHash: 'Mapper-MappingList-Content',
+          TemplateHash: 'Mapper-MappingList-Template',
+          ContentDestinationAddress: '#DataMapper-MappingList-Slot',
+          RenderMethod: 'replace'
+        }]
+      };
+      class PictViewMapperMappingList extends libPictView {
+        constructor(pFable, pOptions, pServiceHash) {
+          super(pFable, pOptions, pServiceHash);
+        }
+        onBeforeRender(pRenderable) {
+          let tmpState = this.pict.AppData.Mapper;
+          let tmpSaved = tmpState.SavedMappings || [];
+          tmpState.SavedMappingsForTemplate = tmpSaved.map(pM => {
+            let tmpParts = [];
+            if (pM.SourceBeaconName) tmpParts.push(`${pM.SourceBeaconName}${pM.SourceEntity ? '/' + pM.SourceEntity : ''}`);
+            if (pM.TargetBeaconName) tmpParts.push(`${pM.TargetBeaconName}${pM.TargetEntity ? '/' + pM.TargetEntity : ''}`);
+            return {
+              IDMappingConfig: pM.IDMappingConfig,
+              Name: pM.Name || '(unnamed)',
+              Subline: tmpParts.join(' → ')
+            };
+          });
+          tmpState.SavedMappingsEmptyHTML = tmpSaved.length === 0 ? '<div class="ml-empty">No saved mappings yet. Save one from the Visual Mapper tab.</div>' : '';
+          return super.onBeforeRender(pRenderable);
+        }
+        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
+          let tmpProvider = this.pict.providers.MapperAPI;
+          let tmpRefreshBtn = this.pict.ContentAssignment.getElement('#DataMapper-Refresh-Mappings');
+          if (tmpRefreshBtn && tmpRefreshBtn.length) {
+            tmpRefreshBtn[0].addEventListener('click', () => tmpProvider.loadSavedMappings());
+          }
+          let tmpLoadBtns = this.pict.ContentAssignment.getElement('[data-load-mapping]');
+          if (tmpLoadBtns && tmpLoadBtns.length) {
+            for (let i = 0; i < tmpLoadBtns.length; i++) {
+              tmpLoadBtns[i].addEventListener('click', pEvent => {
+                let tmpID = parseInt(pEvent.currentTarget.getAttribute('data-load-mapping'), 10);
+                if (tmpID) tmpProvider.loadSavedMapping(tmpID);
+              });
+            }
+          }
+          let tmpDeleteBtns = this.pict.ContentAssignment.getElement('[data-delete-mapping]');
+          if (tmpDeleteBtns && tmpDeleteBtns.length) {
+            for (let i = 0; i < tmpDeleteBtns.length; i++) {
+              tmpDeleteBtns[i].addEventListener('click', pEvent => {
+                let tmpID = parseInt(pEvent.currentTarget.getAttribute('data-delete-mapping'), 10);
+                if (tmpID) tmpProvider.deleteSavedMapping(tmpID);
+              });
+            }
+          }
+          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
+        }
+      }
+      module.exports = PictViewMapperMappingList;
+      module.exports.default_configuration = _ViewConfiguration;
+    }, {
+      "pict-view": 32
+    }],
+    19: [function (require, module, exports) {
       module.exports = {
         "name": "fable-serviceproviderbase",
         "version": "3.0.19",
@@ -92,7 +3406,7 @@
         }
       };
     }, {}],
-    2: [function (require, module, exports) {
+    20: [function (require, module, exports) {
       /**
       * Fable Service Base
       * @author <steven@velozo.com>
@@ -180,9 +3494,9 @@
       // This is left here in case we want to go back to having different code/base class for "core" services
       module.exports.CoreServiceProviderBase = FableServiceProviderBase;
     }, {
-      "../package.json": 1
+      "../package.json": 19
     }],
-    3: [function (require, module, exports) {
+    21: [function (require, module, exports) {
       module.exports = {
         "name": "pict-application",
         "version": "1.0.33",
@@ -237,7 +3551,7 @@
         }
       };
     }, {}],
-    4: [function (require, module, exports) {
+    22: [function (require, module, exports) {
       const libFableServiceBase = require('fable-serviceproviderbase');
       const libPackage = require('../package.json');
       const defaultPictSettings = {
@@ -1469,10 +4783,2087 @@
       }
       module.exports = PictApplication;
     }, {
-      "../package.json": 3,
-      "fable-serviceproviderbase": 2
+      "../package.json": 21,
+      "fable-serviceproviderbase": 20
     }],
-    5: [function (require, module, exports) {
+    23: [function (require, module, exports) {
+      /**
+       * Pict-Modal-Confirm
+       *
+       * Builds confirm and double-confirm dialog DOM, returns Promises.
+       */
+      class PictModalConfirm {
+        constructor(pModal) {
+          this._modal = pModal;
+        }
+
+        /**
+         * Show a single-step confirmation dialog.
+         *
+         * @param {string} pMessage - The confirmation message
+         * @param {object} [pOptions] - Options (title, confirmLabel, cancelLabel, dangerous)
+         * @returns {Promise<boolean>}
+         */
+        confirm(pMessage, pOptions) {
+          let tmpOptions = Object.assign({}, this._modal.options.DefaultConfirmOptions, pOptions);
+          return new Promise(fResolve => {
+            let tmpDialog = this._buildDialog(tmpOptions.title, pMessage, fResolve, tmpOptions);
+            this._showDialog(tmpDialog, fResolve);
+          });
+        }
+
+        /**
+         * Show a two-step confirmation dialog.
+         *
+         * If confirmPhrase is provided, user must type it to enable the confirm button.
+         * Otherwise, first click changes button text, second click confirms.
+         *
+         * @param {string} pMessage - The confirmation message
+         * @param {object} [pOptions] - Options (title, confirmPhrase, phrasePrompt, confirmLabel, cancelLabel)
+         * @returns {Promise<boolean>}
+         */
+        doubleConfirm(pMessage, pOptions) {
+          let tmpOptions = Object.assign({}, this._modal.options.DefaultDoubleConfirmOptions, pOptions);
+          return new Promise(fResolve => {
+            let tmpDialog = this._buildDoubleConfirmDialog(tmpOptions.title, pMessage, fResolve, tmpOptions);
+            this._showDialog(tmpDialog, fResolve);
+          });
+        }
+
+        /**
+         * Build a standard confirm dialog element.
+         *
+         * @param {string} pTitle
+         * @param {string} pMessage
+         * @param {function} fResolve - Promise resolver
+         * @param {object} pOptions
+         * @returns {HTMLElement}
+         */
+        _buildDialog(pTitle, pMessage, fResolve, pOptions) {
+          let tmpId = this._modal._nextId();
+          let tmpBtnStyle = pOptions.dangerous ? 'danger' : 'primary';
+          let tmpDialog = document.createElement('div');
+          tmpDialog.className = 'pict-modal-dialog';
+          if (pOptions.unbounded) {
+            tmpDialog.className += ' pict-modal-dialog--unbounded';
+          }
+          tmpDialog.id = 'pict-modal-' + tmpId;
+          tmpDialog.setAttribute('role', 'dialog');
+          tmpDialog.setAttribute('aria-modal', 'true');
+          tmpDialog.style.width = '420px';
+          tmpDialog.innerHTML = '<div class="pict-modal-dialog-header">' + '<span class="pict-modal-dialog-title">' + this._escapeHTML(pTitle) + '</span>' + '<button class="pict-modal-dialog-close" aria-label="Close">&times;</button>' + '</div>' + '<div class="pict-modal-dialog-body">' + '<p>' + this._escapeHTML(pMessage) + '</p>' + '</div>' + '<div class="pict-modal-dialog-footer">' + '<button class="pict-modal-btn" data-action="cancel">' + this._escapeHTML(pOptions.cancelLabel) + '</button>' + '<button class="pict-modal-btn pict-modal-btn--' + tmpBtnStyle + '" data-action="confirm">' + this._escapeHTML(pOptions.confirmLabel) + '</button>' + '</div>';
+          let tmpCloseBtn = tmpDialog.querySelector('.pict-modal-dialog-close');
+          let tmpCancelBtn = tmpDialog.querySelector('[data-action="cancel"]');
+          let tmpConfirmBtn = tmpDialog.querySelector('[data-action="confirm"]');
+          let tmpDismiss = pResult => {
+            this._dismissDialog(tmpDialog, pResult, fResolve);
+          };
+          tmpCloseBtn.addEventListener('click', () => {
+            tmpDismiss(false);
+          });
+          tmpCancelBtn.addEventListener('click', () => {
+            tmpDismiss(false);
+          });
+          tmpConfirmBtn.addEventListener('click', () => {
+            tmpDismiss(true);
+          });
+          tmpDialog._dismiss = tmpDismiss;
+          tmpDialog._focusTarget = tmpCancelBtn;
+          return tmpDialog;
+        }
+
+        /**
+         * Build a double-confirm dialog element.
+         *
+         * @param {string} pTitle
+         * @param {string} pMessage
+         * @param {function} fResolve - Promise resolver
+         * @param {object} pOptions
+         * @returns {HTMLElement}
+         */
+        _buildDoubleConfirmDialog(pTitle, pMessage, fResolve, pOptions) {
+          let tmpId = this._modal._nextId();
+          let tmpHasPhrase = typeof pOptions.confirmPhrase === 'string' && pOptions.confirmPhrase.length > 0;
+          let tmpDialog = document.createElement('div');
+          tmpDialog.className = 'pict-modal-dialog';
+          if (pOptions.unbounded) {
+            tmpDialog.className += ' pict-modal-dialog--unbounded';
+          }
+          tmpDialog.id = 'pict-modal-' + tmpId;
+          tmpDialog.setAttribute('role', 'dialog');
+          tmpDialog.setAttribute('aria-modal', 'true');
+          tmpDialog.style.width = '420px';
+          let tmpBodyContent = '<p>' + this._escapeHTML(pMessage) + '</p>';
+          if (tmpHasPhrase) {
+            let tmpPromptText = pOptions.phrasePrompt.replace('{phrase}', pOptions.confirmPhrase);
+            tmpBodyContent += '<div class="pict-modal-confirm-prompt">' + this._escapeHTML(tmpPromptText) + '</div>' + '<input type="text" class="pict-modal-confirm-input" autocomplete="off" spellcheck="false" />';
+          }
+          tmpDialog.innerHTML = '<div class="pict-modal-dialog-header">' + '<span class="pict-modal-dialog-title">' + this._escapeHTML(pTitle) + '</span>' + '<button class="pict-modal-dialog-close" aria-label="Close">&times;</button>' + '</div>' + '<div class="pict-modal-dialog-body">' + tmpBodyContent + '</div>' + '<div class="pict-modal-dialog-footer">' + '<button class="pict-modal-btn" data-action="cancel">' + this._escapeHTML(pOptions.cancelLabel) + '</button>' + '<button class="pict-modal-btn pict-modal-btn--danger" data-action="confirm" disabled>' + this._escapeHTML(pOptions.confirmLabel) + '</button>' + '</div>';
+          let tmpCloseBtn = tmpDialog.querySelector('.pict-modal-dialog-close');
+          let tmpCancelBtn = tmpDialog.querySelector('[data-action="cancel"]');
+          let tmpConfirmBtn = tmpDialog.querySelector('[data-action="confirm"]');
+          let tmpDismiss = pResult => {
+            this._dismissDialog(tmpDialog, pResult, fResolve);
+          };
+          tmpCloseBtn.addEventListener('click', () => {
+            tmpDismiss(false);
+          });
+          tmpCancelBtn.addEventListener('click', () => {
+            tmpDismiss(false);
+          });
+          if (tmpHasPhrase) {
+            // Phrase-based: enable confirm button when input matches
+            let tmpInput = tmpDialog.querySelector('.pict-modal-confirm-input');
+            tmpInput.addEventListener('input', () => {
+              tmpConfirmBtn.disabled = tmpInput.value !== pOptions.confirmPhrase;
+            });
+            tmpConfirmBtn.addEventListener('click', () => {
+              if (!tmpConfirmBtn.disabled) {
+                tmpDismiss(true);
+              }
+            });
+            tmpDialog._focusTarget = tmpInput;
+          } else {
+            // Two-click: first click changes label, second click confirms
+            let tmpClickCount = 0;
+            let tmpOriginalLabel = pOptions.confirmLabel;
+            tmpConfirmBtn.disabled = false;
+            tmpConfirmBtn.addEventListener('click', () => {
+              tmpClickCount++;
+              if (tmpClickCount === 1) {
+                tmpConfirmBtn.textContent = 'Click again to confirm';
+              } else {
+                tmpDismiss(true);
+              }
+            });
+            tmpDialog._focusTarget = tmpCancelBtn;
+          }
+          tmpDialog._dismiss = tmpDismiss;
+          return tmpDialog;
+        }
+
+        /**
+         * Show a dialog element: append to body, show overlay, animate in.
+         *
+         * @param {HTMLElement} pDialog
+         * @param {function} fResolve - Promise resolver (for overlay click dismiss)
+         */
+        _showDialog(pDialog, fResolve) {
+          let tmpModalEntry = {
+            element: pDialog,
+            dismiss: pDialog._dismiss,
+            type: 'confirm'
+          };
+
+          // Show overlay
+          let tmpOverlayClickHandler = null;
+          if (this._modal.options.OverlayClickDismisses) {
+            tmpOverlayClickHandler = () => {
+              pDialog._dismiss(false);
+            };
+          }
+          this._modal._overlay.show(tmpOverlayClickHandler);
+
+          // Append to body
+          document.body.appendChild(pDialog);
+
+          // Track active modal
+          this._modal._activeModals.push(tmpModalEntry);
+
+          // Animate in
+          void pDialog.offsetHeight;
+          pDialog.classList.add('pict-modal-visible');
+
+          // Focus
+          if (pDialog._focusTarget) {
+            pDialog._focusTarget.focus();
+          }
+
+          // Keyboard handler
+          pDialog._keyHandler = pEvent => {
+            if (pEvent.key === 'Escape') {
+              pDialog._dismiss(false);
+            }
+          };
+          document.addEventListener('keydown', pDialog._keyHandler);
+        }
+
+        /**
+         * Dismiss a dialog: animate out, remove from DOM, hide overlay.
+         *
+         * @param {HTMLElement} pDialog
+         * @param {*} pResult - Value to resolve the promise with
+         * @param {function} fResolve - Promise resolver
+         */
+        _dismissDialog(pDialog, pResult, fResolve) {
+          // Prevent double-dismiss
+          if (pDialog._dismissed) {
+            return;
+          }
+          pDialog._dismissed = true;
+
+          // Remove keyboard handler
+          if (pDialog._keyHandler) {
+            document.removeEventListener('keydown', pDialog._keyHandler);
+          }
+
+          // Animate out
+          pDialog.classList.remove('pict-modal-visible');
+
+          // Remove from active modals
+          this._modal._activeModals = this._modal._activeModals.filter(pEntry => {
+            return pEntry.element !== pDialog;
+          });
+
+          // Update overlay click handler to point to new topmost modal
+          if (this._modal._activeModals.length > 0) {
+            let tmpTopModal = this._modal._activeModals[this._modal._activeModals.length - 1];
+            this._modal._overlay.updateClickHandler(this._modal.options.OverlayClickDismisses ? tmpTopModal.dismiss : null);
+          }
+
+          // Hide overlay
+          this._modal._overlay.hide();
+
+          // Remove from DOM after transition
+          setTimeout(() => {
+            if (pDialog.parentNode) {
+              pDialog.parentNode.removeChild(pDialog);
+            }
+          }, 220);
+
+          // Resolve promise
+          fResolve(pResult);
+        }
+
+        /**
+         * Escape HTML special characters.
+         *
+         * @param {string} pText
+         * @returns {string}
+         */
+        _escapeHTML(pText) {
+          if (typeof pText !== 'string') {
+            return '';
+          }
+          return pText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+      }
+      module.exports = PictModalConfirm;
+    }, {}],
+    24: [function (require, module, exports) {
+      /**
+       * Pict-Modal-Overlay
+       *
+       * Manages a shared backdrop overlay element appended to document.body.
+       * Reference-counted — created on first modal open, removed when last closes.
+       */
+      class PictModalOverlay {
+        constructor(pModal) {
+          this._modal = pModal;
+          this._element = null;
+          this._refCount = 0;
+        }
+
+        /**
+         * Show the overlay (incrementing reference count).
+         * Creates the DOM element on first call.
+         *
+         * @param {function} [fOnClick] - Optional click handler (e.g. dismiss topmost modal)
+         */
+        show(fOnClick) {
+          this._refCount++;
+          if (!this._element) {
+            this._element = document.createElement('div');
+            this._element.className = 'pict-modal-overlay';
+            document.body.appendChild(this._element);
+
+            // Force reflow so the transition animates
+            void this._element.offsetHeight;
+            this._element.classList.add('pict-modal-visible');
+          }
+          if (fOnClick) {
+            // Store the latest click handler (for the topmost modal)
+            this._currentClickHandler = fOnClick;
+            this._element.onclick = pEvent => {
+              if (pEvent.target === this._element && this._currentClickHandler) {
+                this._currentClickHandler();
+              }
+            };
+          }
+        }
+
+        /**
+         * Update the overlay click handler (e.g. when topmost modal changes).
+         *
+         * @param {function} [fOnClick] - New click handler
+         */
+        updateClickHandler(fOnClick) {
+          this._currentClickHandler = fOnClick || null;
+        }
+
+        /**
+         * Hide the overlay (decrementing reference count).
+         * Removes the DOM element when reference count reaches zero.
+         */
+        hide() {
+          this._refCount--;
+          if (this._refCount <= 0) {
+            this._refCount = 0;
+            if (this._element) {
+              this._element.classList.remove('pict-modal-visible');
+              let tmpElement = this._element;
+              // Remove after transition
+              setTimeout(() => {
+                if (tmpElement.parentNode) {
+                  tmpElement.parentNode.removeChild(tmpElement);
+                }
+              }, 220);
+              this._element = null;
+              this._currentClickHandler = null;
+            }
+          }
+        }
+
+        /**
+         * Force-remove the overlay regardless of reference count.
+         */
+        destroy() {
+          this._refCount = 0;
+          if (this._element && this._element.parentNode) {
+            this._element.parentNode.removeChild(this._element);
+          }
+          this._element = null;
+          this._currentClickHandler = null;
+        }
+      }
+      module.exports = PictModalOverlay;
+    }, {}],
+    25: [function (require, module, exports) {
+      /**
+       * Pict-Modal-Panel
+       *
+       * Adds resizable and collapsible panel behavior to any DOM element.
+       * Follows the handler composition pattern used by the other modal
+       * handlers (confirm, window, toast, tooltip).
+       *
+       * Usage:
+       *   let handle = modal.panel('#my-panel', { position: 'right', width: 340 });
+       *   handle.toggle();
+       *   handle.destroy();
+       */
+      class PictModalPanel {
+        constructor(pModal) {
+          this._modal = pModal;
+          this._panels = [];
+        }
+
+        /**
+         * Attach resizable/collapsible panel behavior to an element.
+         *
+         * @param {string} pTargetSelector - CSS selector for the panel element
+         * @param {object} [pOptions] - Panel options
+         * @returns {{ collapse, expand, toggle, setWidth, destroy }} Panel handle
+         */
+        create(pTargetSelector, pOptions) {
+          let tmpDefaults = this._modal && this._modal.options && this._modal.options.DefaultPanelOptions || {};
+          let tmpOptions = Object.assign({}, {
+            position: 'right',
+            width: 340,
+            minWidth: 200,
+            maxWidth: 600,
+            collapsible: true,
+            collapsed: false,
+            persist: false,
+            persistKey: '',
+            onResize: null,
+            onToggle: null
+          }, tmpDefaults, pOptions);
+          if (typeof document === 'undefined') return this._nullHandle();
+          let tmpTarget = document.querySelector(pTargetSelector);
+          if (!tmpTarget) return this._nullHandle();
+          let tmpId = this._modal._nextId();
+          let tmpIsRight = tmpOptions.position === 'right';
+          let tmpIsCollapsed = false;
+          let tmpCurrentWidth = tmpOptions.width;
+          let tmpDestroyed = false;
+
+          // Restore persisted state
+          if (tmpOptions.persist && tmpOptions.persistKey) {
+            try {
+              let tmpStored = localStorage.getItem('pict-panel-' + tmpOptions.persistKey);
+              if (tmpStored) {
+                let tmpParsed = JSON.parse(tmpStored);
+                if (typeof tmpParsed.width === 'number') tmpCurrentWidth = tmpParsed.width;
+                if (typeof tmpParsed.collapsed === 'boolean') tmpOptions.collapsed = tmpParsed.collapsed;
+              }
+            } catch (e) {/* ignore */}
+          }
+
+          // Apply classes and initial width
+          tmpTarget.classList.add('pict-panel');
+          tmpTarget.classList.add(tmpIsRight ? 'pict-panel-right' : 'pict-panel-left');
+          tmpTarget.style.width = tmpCurrentWidth + 'px';
+
+          // Remove display:none if present — panel uses width collapse instead
+          if (tmpTarget.style.display === 'none') {
+            tmpTarget.style.display = '';
+          }
+
+          // ── Create the edge container ───────────────────────
+          let tmpEdge = document.createElement('div');
+          tmpEdge.className = 'pict-panel-edge ' + (tmpIsRight ? 'pict-panel-edge-right' : 'pict-panel-edge-left');
+
+          // Resize handle
+          let tmpResize = document.createElement('div');
+          tmpResize.className = 'pict-panel-resize';
+          tmpEdge.appendChild(tmpResize);
+
+          // Collapse tab (chevron SVG)
+          let tmpTab = null;
+          if (tmpOptions.collapsible) {
+            tmpTab = document.createElement('div');
+            tmpTab.className = 'pict-panel-tab';
+            tmpTab.title = 'Toggle panel';
+            tmpEdge.appendChild(tmpTab);
+          }
+
+          // Insert edge as a sibling so it is not clipped by the
+          // panel's own overflow (e.g. overflow-y: auto for scrolling).
+          // Right panels: edge goes BEFORE the panel (left side).
+          // Left panels: edge goes AFTER the panel (right side).
+          if (tmpTarget.parentNode) {
+            if (tmpIsRight) {
+              tmpTarget.parentNode.insertBefore(tmpEdge, tmpTarget);
+            } else {
+              tmpTarget.parentNode.insertBefore(tmpEdge, tmpTarget.nextSibling);
+            }
+          } else {
+            tmpTarget.insertBefore(tmpEdge, tmpTarget.firstChild);
+          }
+
+          // ── Chevron SVG helper ──────────────────────────────
+          let tmpChevronRight = '<svg width="1em" height="1em" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,3 11,8 6,13"/></svg>';
+          let tmpChevronLeft = '<svg width="1em" height="1em" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="10,3 5,8 10,13"/></svg>';
+          let tmpUpdateChevron = () => {
+            if (!tmpTab) return;
+            if (tmpIsRight) {
+              tmpTab.innerHTML = tmpIsCollapsed ? tmpChevronLeft : tmpChevronRight;
+            } else {
+              tmpTab.innerHTML = tmpIsCollapsed ? tmpChevronRight : tmpChevronLeft;
+            }
+          };
+
+          // ── Persist helper ──────────────────────────────────
+          let tmpPersist = () => {
+            if (!tmpOptions.persist || !tmpOptions.persistKey) return;
+            try {
+              localStorage.setItem('pict-panel-' + tmpOptions.persistKey, JSON.stringify({
+                width: tmpCurrentWidth,
+                collapsed: tmpIsCollapsed
+              }));
+            } catch (e) {/* ignore */}
+          };
+
+          // ── Collapse / expand ───────────────────────────────
+          let tmpCollapse = () => {
+            if (tmpIsCollapsed || tmpDestroyed) return;
+            tmpIsCollapsed = true;
+            tmpTarget.classList.add('pict-panel-collapsed');
+            tmpEdge.classList.add('pict-panel-edge-collapsed');
+            tmpUpdateChevron();
+            tmpPersist();
+            if (typeof tmpOptions.onToggle === 'function') tmpOptions.onToggle(true);
+          };
+          let tmpExpand = () => {
+            if (!tmpIsCollapsed || tmpDestroyed) return;
+            tmpIsCollapsed = false;
+            tmpEdge.classList.remove('pict-panel-edge-collapsed');
+            tmpTarget.classList.remove('pict-panel-collapsed');
+            tmpTarget.style.width = tmpCurrentWidth + 'px';
+            tmpUpdateChevron();
+            tmpPersist();
+            if (typeof tmpOptions.onToggle === 'function') tmpOptions.onToggle(false);
+          };
+          let tmpToggle = () => {
+            if (tmpIsCollapsed) tmpExpand();else tmpCollapse();
+          };
+          let tmpSetWidth = pWidth => {
+            if (tmpDestroyed) return;
+            let tmpWidth = Math.max(tmpOptions.minWidth, Math.min(tmpOptions.maxWidth, pWidth));
+            tmpCurrentWidth = tmpWidth;
+            if (!tmpIsCollapsed) {
+              tmpTarget.style.width = tmpWidth + 'px';
+            }
+            tmpPersist();
+            if (typeof tmpOptions.onResize === 'function') tmpOptions.onResize(tmpWidth);
+          };
+
+          // ── Tab click ───────────────────────────────────────
+          if (tmpTab) {
+            tmpTab.addEventListener('click', pEvent => {
+              pEvent.stopPropagation();
+              tmpToggle();
+            });
+          }
+
+          // ── Resize drag ─────────────────────────────────────
+          let tmpOnMouseDown = pEvent => {
+            if (tmpIsCollapsed) return;
+            pEvent.preventDefault();
+            let tmpStartX = pEvent.clientX;
+            let tmpStartWidth = tmpTarget.offsetWidth;
+            tmpResize.classList.add('dragging');
+            tmpTarget.style.transition = 'none';
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'col-resize';
+            let tmpOnMouseMove = pMoveEvent => {
+              let tmpDelta = tmpIsRight ? tmpStartX - pMoveEvent.clientX : pMoveEvent.clientX - tmpStartX;
+              let tmpNewWidth = Math.max(tmpOptions.minWidth, Math.min(tmpOptions.maxWidth, tmpStartWidth + tmpDelta));
+              tmpTarget.style.width = tmpNewWidth + 'px';
+            };
+            let tmpOnMouseUp = pUpEvent => {
+              document.removeEventListener('mousemove', tmpOnMouseMove);
+              document.removeEventListener('mouseup', tmpOnMouseUp);
+              tmpResize.classList.remove('dragging');
+              tmpTarget.style.transition = '';
+              document.body.style.userSelect = '';
+              document.body.style.cursor = '';
+
+              // Capture the final width
+              tmpCurrentWidth = tmpTarget.offsetWidth;
+              tmpPersist();
+              if (typeof tmpOptions.onResize === 'function') tmpOptions.onResize(tmpCurrentWidth);
+            };
+            document.addEventListener('mousemove', tmpOnMouseMove);
+            document.addEventListener('mouseup', tmpOnMouseUp);
+          };
+          tmpResize.addEventListener('mousedown', tmpOnMouseDown);
+
+          // ── Initial state ───────────────────────────────────
+          tmpUpdateChevron();
+          if (tmpOptions.collapsed) {
+            tmpIsCollapsed = true;
+            tmpTarget.classList.add('pict-panel-collapsed');
+            tmpEdge.classList.add('pict-panel-edge-collapsed');
+            tmpUpdateChevron();
+          }
+
+          // ── Destroy ─────────────────────────────────────────
+          let tmpDestroy = () => {
+            if (tmpDestroyed) return;
+            tmpDestroyed = true;
+            tmpResize.removeEventListener('mousedown', tmpOnMouseDown);
+            if (tmpEdge.parentNode) tmpEdge.remove();
+            tmpTarget.classList.remove('pict-panel', 'pict-panel-right', 'pict-panel-left', 'pict-panel-collapsed');
+            tmpTarget.style.width = '';
+            tmpTarget.style.transition = '';
+            let tmpIdx = this._panels.indexOf(tmpHandle);
+            if (tmpIdx >= 0) this._panels.splice(tmpIdx, 1);
+          };
+
+          // ── Return handle ───────────────────────────────────
+          let tmpHandle = {
+            id: tmpId,
+            collapse: tmpCollapse,
+            expand: tmpExpand,
+            toggle: tmpToggle,
+            setWidth: tmpSetWidth,
+            destroy: tmpDestroy
+          };
+          this._panels.push(tmpHandle);
+          return tmpHandle;
+        }
+
+        /**
+         * Return a no-op handle for server-side or missing-element cases.
+         */
+        _nullHandle() {
+          return {
+            id: 0,
+            collapse: () => {},
+            expand: () => {},
+            toggle: () => {},
+            setWidth: () => {},
+            destroy: () => {}
+          };
+        }
+
+        /**
+         * Destroy all active panels.
+         */
+        destroyAll() {
+          let tmpPanels = this._panels.slice();
+          for (let i = 0; i < tmpPanels.length; i++) {
+            tmpPanels[i].destroy();
+          }
+        }
+      }
+      module.exports = PictModalPanel;
+    }, {}],
+    26: [function (require, module, exports) {
+      /**
+       * Pict-Modal-Toast
+       *
+       * Manages toast notification elements with auto-dismiss and stacking.
+       */
+      class PictModalToast {
+        constructor(pModal) {
+          this._modal = pModal;
+          this._containers = {};
+        }
+
+        /**
+         * Show a toast notification.
+         *
+         * @param {string} pMessage - Toast message text
+         * @param {object} [pOptions] - Options (type, duration, position, dismissible)
+         * @returns {{ dismiss: function }} Handle with dismiss method
+         */
+        toast(pMessage, pOptions) {
+          let tmpOptions = Object.assign({}, this._modal.options.DefaultToastOptions, pOptions);
+          let tmpContainer = this._getContainer(tmpOptions.position);
+          let tmpId = this._modal._nextId();
+          let tmpToast = document.createElement('div');
+          tmpToast.className = 'pict-modal-toast pict-modal-toast--' + tmpOptions.type;
+          tmpToast.id = 'pict-modal-toast-' + tmpId;
+          let tmpContent = '<span class="pict-modal-toast-message">' + this._escapeHTML(pMessage) + '</span>';
+          if (tmpOptions.dismissible) {
+            tmpContent += '<button class="pict-modal-toast-dismiss" aria-label="Dismiss">&times;</button>';
+          }
+          tmpToast.innerHTML = tmpContent;
+
+          // Create handle
+          let tmpDismissed = false;
+          let tmpTimeoutHandle = null;
+          let tmpDismiss = () => {
+            if (tmpDismissed) {
+              return;
+            }
+            tmpDismissed = true;
+            if (tmpTimeoutHandle) {
+              clearTimeout(tmpTimeoutHandle);
+            }
+
+            // Exit animation
+            tmpToast.classList.remove('pict-modal-visible');
+            tmpToast.classList.add('pict-modal-toast-exit');
+
+            // Remove from active list
+            this._modal._activeToasts = this._modal._activeToasts.filter(pEntry => {
+              return pEntry.element !== tmpToast;
+            });
+
+            // Remove from DOM after transition
+            setTimeout(() => {
+              if (tmpToast.parentNode) {
+                tmpToast.parentNode.removeChild(tmpToast);
+              }
+              this._cleanupContainer(tmpOptions.position);
+            }, 220);
+          };
+          let tmpHandle = {
+            dismiss: tmpDismiss
+          };
+
+          // Wire dismiss button
+          if (tmpOptions.dismissible) {
+            let tmpDismissBtn = tmpToast.querySelector('.pict-modal-toast-dismiss');
+            if (tmpDismissBtn) {
+              tmpDismissBtn.addEventListener('click', tmpDismiss);
+            }
+          }
+
+          // Append to container
+          tmpContainer.appendChild(tmpToast);
+
+          // Track
+          let tmpEntry = {
+            element: tmpToast,
+            dismiss: tmpDismiss,
+            handle: tmpHandle
+          };
+          this._modal._activeToasts.push(tmpEntry);
+
+          // Animate in
+          void tmpToast.offsetHeight;
+          tmpToast.classList.add('pict-modal-visible');
+
+          // Auto-dismiss
+          if (tmpOptions.duration > 0) {
+            tmpTimeoutHandle = setTimeout(tmpDismiss, tmpOptions.duration);
+          }
+          return tmpHandle;
+        }
+
+        /**
+         * Get or create a toast container for the given position.
+         *
+         * @param {string} pPosition - Position key (e.g. 'top-right')
+         * @returns {HTMLElement}
+         */
+        _getContainer(pPosition) {
+          if (this._containers[pPosition]) {
+            return this._containers[pPosition];
+          }
+          let tmpContainer = document.createElement('div');
+          tmpContainer.className = 'pict-modal-toast-container pict-modal-toast-container--' + pPosition;
+          document.body.appendChild(tmpContainer);
+          this._containers[pPosition] = tmpContainer;
+          return tmpContainer;
+        }
+
+        /**
+         * Remove a container if it has no more toasts.
+         *
+         * @param {string} pPosition
+         */
+        _cleanupContainer(pPosition) {
+          let tmpContainer = this._containers[pPosition];
+          if (tmpContainer && tmpContainer.children.length === 0) {
+            if (tmpContainer.parentNode) {
+              tmpContainer.parentNode.removeChild(tmpContainer);
+            }
+            delete this._containers[pPosition];
+          }
+        }
+
+        /**
+         * Dismiss all active toasts.
+         */
+        dismissAll() {
+          let tmpToasts = this._modal._activeToasts.slice();
+          for (let i = 0; i < tmpToasts.length; i++) {
+            tmpToasts[i].dismiss();
+          }
+        }
+
+        /**
+         * Destroy all containers.
+         */
+        destroy() {
+          this.dismissAll();
+          let tmpPositions = Object.keys(this._containers);
+          for (let i = 0; i < tmpPositions.length; i++) {
+            let tmpContainer = this._containers[tmpPositions[i]];
+            if (tmpContainer && tmpContainer.parentNode) {
+              tmpContainer.parentNode.removeChild(tmpContainer);
+            }
+          }
+          this._containers = {};
+        }
+
+        /**
+         * Escape HTML special characters.
+         *
+         * @param {string} pText
+         * @returns {string}
+         */
+        _escapeHTML(pText) {
+          if (typeof pText !== 'string') {
+            return '';
+          }
+          return pText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+      }
+      module.exports = PictModalToast;
+    }, {}],
+    27: [function (require, module, exports) {
+      /**
+       * Pict-Modal-Tooltip
+       *
+       * Manages simple text and rich HTML tooltips with positioning and auto-flip.
+       */
+      class PictModalTooltip {
+        constructor(pModal) {
+          this._modal = pModal;
+        }
+
+        /**
+         * Attach a simple text tooltip to an element.
+         *
+         * @param {HTMLElement} pElement - Target element
+         * @param {string} pText - Tooltip text
+         * @param {object} [pOptions] - Options (position, delay, maxWidth)
+         * @returns {{ destroy: function }} Handle to remove the tooltip
+         */
+        tooltip(pElement, pText, pOptions) {
+          let tmpOptions = Object.assign({}, this._modal.options.DefaultTooltipOptions, pOptions);
+          return this._attachTooltip(pElement, pText, false, tmpOptions);
+        }
+
+        /**
+         * Attach a rich HTML tooltip to an element.
+         *
+         * @param {HTMLElement} pElement - Target element
+         * @param {string} pHTMLContent - HTML content for the tooltip
+         * @param {object} [pOptions] - Options (position, delay, maxWidth, interactive)
+         * @returns {{ destroy: function }} Handle to remove the tooltip
+         */
+        richTooltip(pElement, pHTMLContent, pOptions) {
+          let tmpOptions = Object.assign({}, this._modal.options.DefaultTooltipOptions, pOptions);
+          return this._attachTooltip(pElement, pHTMLContent, true, tmpOptions);
+        }
+
+        /**
+         * Internal: attach tooltip event listeners to an element.
+         *
+         * @param {HTMLElement} pElement
+         * @param {string} pContent
+         * @param {boolean} pIsHTML
+         * @param {object} pOptions
+         * @returns {{ destroy: function }}
+         */
+        _attachTooltip(pElement, pContent, pIsHTML, pOptions) {
+          let tmpTooltipElement = null;
+          let tmpShowTimeout = null;
+          let tmpHideTimeout = null;
+          let tmpDestroyed = false;
+          let tmpId = this._modal._nextId();
+          let tmpShow = () => {
+            if (tmpDestroyed || tmpTooltipElement) {
+              return;
+            }
+            tmpTooltipElement = document.createElement('div');
+            tmpTooltipElement.className = 'pict-modal-tooltip pict-modal-tooltip--' + pOptions.position;
+            tmpTooltipElement.id = 'pict-modal-tooltip-' + tmpId;
+            tmpTooltipElement.setAttribute('role', 'tooltip');
+            tmpTooltipElement.style.maxWidth = pOptions.maxWidth;
+            if (pOptions.interactive) {
+              tmpTooltipElement.classList.add('pict-modal-tooltip-interactive');
+            }
+
+            // Arrow
+            let tmpArrow = document.createElement('div');
+            tmpArrow.className = 'pict-modal-tooltip-arrow';
+
+            // Content
+            let tmpContentDiv = document.createElement('div');
+            if (pIsHTML) {
+              tmpContentDiv.innerHTML = pContent;
+            } else {
+              tmpContentDiv.textContent = pContent;
+            }
+            tmpTooltipElement.appendChild(tmpArrow);
+            tmpTooltipElement.appendChild(tmpContentDiv);
+            document.body.appendChild(tmpTooltipElement);
+
+            // Set aria-describedby on target
+            pElement.setAttribute('aria-describedby', tmpTooltipElement.id);
+
+            // Position
+            this._positionTooltip(tmpTooltipElement, pElement, pOptions.position);
+
+            // Animate in
+            void tmpTooltipElement.offsetHeight;
+            tmpTooltipElement.classList.add('pict-modal-visible');
+
+            // Track
+            this._modal._activeTooltips.push({
+              element: tmpTooltipElement,
+              targetElement: pElement,
+              destroy: tmpDestroy
+            });
+
+            // For interactive tooltips, allow hovering over the tooltip itself
+            if (pOptions.interactive && tmpTooltipElement) {
+              tmpTooltipElement.addEventListener('mouseenter', () => {
+                if (tmpHideTimeout) {
+                  clearTimeout(tmpHideTimeout);
+                  tmpHideTimeout = null;
+                }
+              });
+              tmpTooltipElement.addEventListener('mouseleave', () => {
+                tmpHide();
+              });
+            }
+          };
+          let tmpHide = () => {
+            if (!tmpTooltipElement) {
+              return;
+            }
+            tmpTooltipElement.classList.remove('pict-modal-visible');
+            let tmpEl = tmpTooltipElement;
+            tmpTooltipElement = null;
+
+            // Remove aria
+            pElement.removeAttribute('aria-describedby');
+
+            // Remove from tracking
+            this._modal._activeTooltips = this._modal._activeTooltips.filter(pEntry => {
+              return pEntry.element !== tmpEl;
+            });
+            setTimeout(() => {
+              if (tmpEl.parentNode) {
+                tmpEl.parentNode.removeChild(tmpEl);
+              }
+            }, 220);
+          };
+          let tmpOnMouseEnter = () => {
+            if (tmpHideTimeout) {
+              clearTimeout(tmpHideTimeout);
+              tmpHideTimeout = null;
+            }
+            tmpShowTimeout = setTimeout(tmpShow, pOptions.delay);
+          };
+          let tmpOnMouseLeave = () => {
+            if (tmpShowTimeout) {
+              clearTimeout(tmpShowTimeout);
+              tmpShowTimeout = null;
+            }
+            // Small delay before hiding to allow moving to interactive tooltip
+            if (pOptions.interactive) {
+              tmpHideTimeout = setTimeout(tmpHide, 100);
+            } else {
+              tmpHide();
+            }
+          };
+          let tmpOnFocusIn = () => {
+            tmpShowTimeout = setTimeout(tmpShow, pOptions.delay);
+          };
+          let tmpOnFocusOut = () => {
+            if (tmpShowTimeout) {
+              clearTimeout(tmpShowTimeout);
+              tmpShowTimeout = null;
+            }
+            tmpHide();
+          };
+
+          // Attach listeners
+          pElement.addEventListener('mouseenter', tmpOnMouseEnter);
+          pElement.addEventListener('mouseleave', tmpOnMouseLeave);
+          pElement.addEventListener('focusin', tmpOnFocusIn);
+          pElement.addEventListener('focusout', tmpOnFocusOut);
+          let tmpDestroy = () => {
+            if (tmpDestroyed) {
+              return;
+            }
+            tmpDestroyed = true;
+            if (tmpShowTimeout) {
+              clearTimeout(tmpShowTimeout);
+            }
+            if (tmpHideTimeout) {
+              clearTimeout(tmpHideTimeout);
+            }
+            tmpHide();
+            pElement.removeEventListener('mouseenter', tmpOnMouseEnter);
+            pElement.removeEventListener('mouseleave', tmpOnMouseLeave);
+            pElement.removeEventListener('focusin', tmpOnFocusIn);
+            pElement.removeEventListener('focusout', tmpOnFocusOut);
+          };
+          return {
+            destroy: tmpDestroy
+          };
+        }
+
+        /**
+         * Position a tooltip element relative to the target element.
+         * Flips direction if the tooltip would overflow the viewport.
+         *
+         * @param {HTMLElement} pTooltip
+         * @param {HTMLElement} pTarget
+         * @param {string} pPosition - 'top', 'bottom', 'left', 'right'
+         */
+        _positionTooltip(pTooltip, pTarget, pPosition) {
+          let tmpTargetRect = pTarget.getBoundingClientRect();
+          let tmpTooltipRect = pTooltip.getBoundingClientRect();
+          let tmpGap = 8;
+          let tmpPosition = pPosition;
+
+          // Flip if needed
+          if (tmpPosition === 'top' && tmpTargetRect.top < tmpTooltipRect.height + tmpGap) {
+            tmpPosition = 'bottom';
+          } else if (tmpPosition === 'bottom' && window.innerHeight - tmpTargetRect.bottom < tmpTooltipRect.height + tmpGap) {
+            tmpPosition = 'top';
+          } else if (tmpPosition === 'left' && tmpTargetRect.left < tmpTooltipRect.width + tmpGap) {
+            tmpPosition = 'right';
+          } else if (tmpPosition === 'right' && window.innerWidth - tmpTargetRect.right < tmpTooltipRect.width + tmpGap) {
+            tmpPosition = 'left';
+          }
+
+          // Update class for arrow direction
+          pTooltip.className = pTooltip.className.replace(/pict-modal-tooltip--\w+/, 'pict-modal-tooltip--' + tmpPosition);
+          let tmpTop = 0;
+          let tmpLeft = 0;
+          switch (tmpPosition) {
+            case 'top':
+              tmpTop = tmpTargetRect.top - tmpTooltipRect.height - tmpGap;
+              tmpLeft = tmpTargetRect.left + tmpTargetRect.width / 2 - tmpTooltipRect.width / 2;
+              break;
+            case 'bottom':
+              tmpTop = tmpTargetRect.bottom + tmpGap;
+              tmpLeft = tmpTargetRect.left + tmpTargetRect.width / 2 - tmpTooltipRect.width / 2;
+              break;
+            case 'left':
+              tmpTop = tmpTargetRect.top + tmpTargetRect.height / 2 - tmpTooltipRect.height / 2;
+              tmpLeft = tmpTargetRect.left - tmpTooltipRect.width - tmpGap;
+              break;
+            case 'right':
+              tmpTop = tmpTargetRect.top + tmpTargetRect.height / 2 - tmpTooltipRect.height / 2;
+              tmpLeft = tmpTargetRect.right + tmpGap;
+              break;
+          }
+
+          // Clamp to viewport
+          tmpLeft = Math.max(4, Math.min(tmpLeft, window.innerWidth - tmpTooltipRect.width - 4));
+          tmpTop = Math.max(4, Math.min(tmpTop, window.innerHeight - tmpTooltipRect.height - 4));
+          pTooltip.style.top = tmpTop + 'px';
+          pTooltip.style.left = tmpLeft + 'px';
+        }
+
+        /**
+         * Dismiss all active tooltips.
+         */
+        dismissAll() {
+          let tmpTooltips = this._modal._activeTooltips.slice();
+          for (let i = 0; i < tmpTooltips.length; i++) {
+            tmpTooltips[i].destroy();
+          }
+        }
+      }
+      module.exports = PictModalTooltip;
+    }, {}],
+    28: [function (require, module, exports) {
+      /**
+       * Pict-Modal-Window
+       *
+       * Builds custom floating modal windows with arbitrary content and buttons.
+       */
+      class PictModalWindow {
+        constructor(pModal) {
+          this._modal = pModal;
+        }
+
+        /**
+         * Show a custom modal window.
+         *
+         * @param {object} [pOptions] - Options
+         * @param {string} [pOptions.title] - Dialog title
+         * @param {string} [pOptions.content] - HTML content for the body
+         * @param {Array} [pOptions.buttons] - Array of { Hash, Label, Style }
+         * @param {boolean} [pOptions.closeable] - Whether the close button and overlay dismiss are enabled
+         * @param {string} [pOptions.width] - CSS width value
+         * @param {boolean} [pOptions.unbounded] - If true, removes the default 90vh/90vw viewport cap. The dialog will grow with its content and may extend beyond the viewport.
+         * @param {function} [pOptions.onOpen] - Called after dialog is shown, receives dialog element
+         * @param {function} [pOptions.onClose] - Called after dialog is dismissed
+         * @returns {Promise<string|null>} Resolves with clicked button Hash, or null on close
+         */
+        show(pOptions) {
+          let tmpOptions = Object.assign({}, this._modal.options.DefaultModalOptions, pOptions);
+          return new Promise(fResolve => {
+            let tmpDialog = this._buildDialog(tmpOptions, fResolve);
+            this._showDialog(tmpDialog, tmpOptions, fResolve);
+          });
+        }
+
+        /**
+         * Build the modal dialog element.
+         *
+         * @param {object} pOptions
+         * @param {function} fResolve
+         * @returns {HTMLElement}
+         */
+        _buildDialog(pOptions, fResolve) {
+          let tmpId = this._modal._nextId();
+          let tmpDialog = document.createElement('div');
+          tmpDialog.className = 'pict-modal-dialog';
+          if (pOptions.unbounded) {
+            tmpDialog.className += ' pict-modal-dialog--unbounded';
+          }
+          tmpDialog.id = 'pict-modal-' + tmpId;
+          tmpDialog.setAttribute('role', 'dialog');
+          tmpDialog.setAttribute('aria-modal', 'true');
+          tmpDialog.style.width = pOptions.width;
+
+          // Header
+          let tmpHeaderHTML = '';
+          if (pOptions.title || pOptions.closeable) {
+            tmpHeaderHTML = '<div class="pict-modal-dialog-header">';
+            tmpHeaderHTML += '<span class="pict-modal-dialog-title">' + this._escapeHTML(pOptions.title) + '</span>';
+            if (pOptions.closeable) {
+              tmpHeaderHTML += '<button class="pict-modal-dialog-close" aria-label="Close">&times;</button>';
+            }
+            tmpHeaderHTML += '</div>';
+          }
+
+          // Body
+          let tmpBodyHTML = '<div class="pict-modal-dialog-body">' + (pOptions.content || '') + '</div>';
+
+          // Footer with buttons
+          let tmpFooterHTML = '';
+          if (pOptions.buttons && pOptions.buttons.length > 0) {
+            tmpFooterHTML = '<div class="pict-modal-dialog-footer">';
+            for (let i = 0; i < pOptions.buttons.length; i++) {
+              let tmpButton = pOptions.buttons[i];
+              let tmpBtnClass = 'pict-modal-btn';
+              if (tmpButton.Style) {
+                tmpBtnClass += ' pict-modal-btn--' + tmpButton.Style;
+              }
+              tmpFooterHTML += '<button class="' + tmpBtnClass + '" data-hash="' + this._escapeHTML(tmpButton.Hash) + '">' + this._escapeHTML(tmpButton.Label) + '</button>';
+            }
+            tmpFooterHTML += '</div>';
+          }
+          tmpDialog.innerHTML = tmpHeaderHTML + tmpBodyHTML + tmpFooterHTML;
+          let tmpDismiss = pResult => {
+            this._dismissDialog(tmpDialog, pResult, fResolve, pOptions);
+          };
+
+          // Wire close button
+          if (pOptions.closeable) {
+            let tmpCloseBtn = tmpDialog.querySelector('.pict-modal-dialog-close');
+            if (tmpCloseBtn) {
+              tmpCloseBtn.addEventListener('click', () => {
+                tmpDismiss(null);
+              });
+            }
+          }
+
+          // Wire action buttons
+          let tmpActionButtons = tmpDialog.querySelectorAll('[data-hash]');
+          for (let i = 0; i < tmpActionButtons.length; i++) {
+            let tmpBtn = tmpActionButtons[i];
+            tmpBtn.addEventListener('click', () => {
+              tmpDismiss(tmpBtn.getAttribute('data-hash'));
+            });
+          }
+          tmpDialog._dismiss = tmpDismiss;
+          return tmpDialog;
+        }
+
+        /**
+         * Show the dialog: append to body, show overlay, animate in.
+         *
+         * @param {HTMLElement} pDialog
+         * @param {object} pOptions
+         * @param {function} fResolve
+         */
+        _showDialog(pDialog, pOptions, fResolve) {
+          let tmpModalEntry = {
+            element: pDialog,
+            dismiss: pDialog._dismiss,
+            type: 'window'
+          };
+
+          // Show overlay
+          let tmpOverlayClickHandler = null;
+          if (this._modal.options.OverlayClickDismisses && pOptions.closeable) {
+            tmpOverlayClickHandler = () => {
+              pDialog._dismiss(null);
+            };
+          }
+          this._modal._overlay.show(tmpOverlayClickHandler);
+
+          // Append to body
+          document.body.appendChild(pDialog);
+
+          // Track
+          this._modal._activeModals.push(tmpModalEntry);
+
+          // Animate in
+          void pDialog.offsetHeight;
+          pDialog.classList.add('pict-modal-visible');
+
+          // Focus first button or close button
+          let tmpFocusTarget = pDialog.querySelector('.pict-modal-btn') || pDialog.querySelector('.pict-modal-dialog-close');
+          if (tmpFocusTarget) {
+            tmpFocusTarget.focus();
+          }
+
+          // Keyboard handler
+          pDialog._keyHandler = pEvent => {
+            if (pEvent.key === 'Escape' && pOptions.closeable) {
+              pDialog._dismiss(null);
+            }
+          };
+          document.addEventListener('keydown', pDialog._keyHandler);
+
+          // onOpen callback
+          if (typeof pOptions.onOpen === 'function') {
+            pOptions.onOpen(pDialog);
+          }
+        }
+
+        /**
+         * Dismiss the dialog: animate out, remove from DOM, hide overlay.
+         *
+         * @param {HTMLElement} pDialog
+         * @param {*} pResult
+         * @param {function} fResolve
+         * @param {object} pOptions
+         */
+        _dismissDialog(pDialog, pResult, fResolve, pOptions) {
+          if (pDialog._dismissed) {
+            return;
+          }
+          pDialog._dismissed = true;
+          if (pDialog._keyHandler) {
+            document.removeEventListener('keydown', pDialog._keyHandler);
+          }
+          pDialog.classList.remove('pict-modal-visible');
+          this._modal._activeModals = this._modal._activeModals.filter(pEntry => {
+            return pEntry.element !== pDialog;
+          });
+          if (this._modal._activeModals.length > 0) {
+            let tmpTopModal = this._modal._activeModals[this._modal._activeModals.length - 1];
+            this._modal._overlay.updateClickHandler(this._modal.options.OverlayClickDismisses ? tmpTopModal.dismiss : null);
+          }
+          this._modal._overlay.hide();
+          setTimeout(() => {
+            if (pDialog.parentNode) {
+              pDialog.parentNode.removeChild(pDialog);
+            }
+          }, 220);
+          if (typeof pOptions.onClose === 'function') {
+            pOptions.onClose(pResult);
+          }
+          fResolve(pResult);
+        }
+
+        /**
+         * Escape HTML special characters.
+         *
+         * @param {string} pText
+         * @returns {string}
+         */
+        _escapeHTML(pText) {
+          if (typeof pText !== 'string') {
+            return '';
+          }
+          return pText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+      }
+      module.exports = PictModalWindow;
+    }, {}],
+    29: [function (require, module, exports) {
+      module.exports = {
+        "AutoInitialize": true,
+        "AutoRender": false,
+        "AutoSolveWithApp": false,
+        "ViewIdentifier": "Pict-Section-Modal",
+        "OverlayClickDismisses": true,
+        "DefaultConfirmOptions": {
+          "title": "Confirm",
+          "confirmLabel": "OK",
+          "cancelLabel": "Cancel",
+          "dangerous": false,
+          "unbounded": false
+        },
+        "DefaultDoubleConfirmOptions": {
+          "title": "Are you sure?",
+          "confirmLabel": "Confirm",
+          "cancelLabel": "Cancel",
+          "phrasePrompt": "Type \"{phrase}\" to confirm:",
+          "confirmPhrase": "",
+          "unbounded": false
+        },
+        "DefaultModalOptions": {
+          "title": "",
+          "content": "",
+          "buttons": [],
+          "closeable": true,
+          "width": "480px",
+          "unbounded": false
+        },
+        "DefaultTooltipOptions": {
+          "position": "top",
+          "delay": 200,
+          "maxWidth": "300px",
+          "interactive": false
+        },
+        "DefaultToastOptions": {
+          "type": "info",
+          "duration": 3000,
+          "position": "top-right",
+          "dismissible": true
+        },
+        "DefaultPanelOptions": {
+          "position": "right",
+          "width": 340,
+          "minWidth": 200,
+          "maxWidth": 600,
+          "collapsible": true,
+          "collapsed": false,
+          "persist": false,
+          "persistKey": ""
+        },
+        "Templates": [],
+        "Renderables": [],
+        "CSS": /*css*/`
+/* pict-section-modal */
+.pict-modal-root
+{
+	/* Overlay */
+	--pict-modal-overlay-bg: rgba(0, 0, 0, 0.5);
+
+	/* Dialog */
+	--pict-modal-bg: #ffffff;
+	--pict-modal-fg: #1a1a1a;
+	--pict-modal-border: #e0e0e0;
+	--pict-modal-border-radius: 8px;
+	--pict-modal-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+	--pict-modal-header-bg: #f5f5f5;
+	--pict-modal-header-fg: #1a1a1a;
+	--pict-modal-header-border: #e0e0e0;
+
+	/* Buttons */
+	--pict-modal-btn-bg: #e0e0e0;
+	--pict-modal-btn-fg: #1a1a1a;
+	--pict-modal-btn-hover-bg: #d0d0d0;
+	--pict-modal-btn-primary-bg: #2563eb;
+	--pict-modal-btn-primary-fg: #ffffff;
+	--pict-modal-btn-primary-hover-bg: #1d4ed8;
+	--pict-modal-btn-danger-bg: #dc2626;
+	--pict-modal-btn-danger-fg: #ffffff;
+	--pict-modal-btn-danger-hover-bg: #b91c1c;
+	--pict-modal-btn-border-radius: 4px;
+
+	/* Toast */
+	--pict-modal-toast-bg: #333333;
+	--pict-modal-toast-fg: #ffffff;
+	--pict-modal-toast-success-bg: #16a34a;
+	--pict-modal-toast-warning-bg: #d97706;
+	--pict-modal-toast-error-bg: #dc2626;
+	--pict-modal-toast-info-bg: #2563eb;
+	--pict-modal-toast-border-radius: 6px;
+	--pict-modal-toast-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+
+	/* Tooltip */
+	--pict-modal-tooltip-bg: #1a1a1a;
+	--pict-modal-tooltip-fg: #ffffff;
+	--pict-modal-tooltip-border-radius: 4px;
+	--pict-modal-tooltip-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+
+	/* Typography */
+	--pict-modal-font-family: system-ui, -apple-system, sans-serif;
+	--pict-modal-font-size: 14px;
+	--pict-modal-title-font-size: 16px;
+
+	/* Animation */
+	--pict-modal-transition-duration: 200ms;
+}
+
+/* Overlay */
+.pict-modal-overlay
+{
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	z-index: 1000;
+	background: var(--pict-modal-overlay-bg);
+	opacity: 0;
+	transition: opacity var(--pict-modal-transition-duration) ease;
+}
+
+.pict-modal-overlay.pict-modal-visible
+{
+	opacity: 1;
+}
+
+/* Dialog */
+.pict-modal-dialog
+{
+	position: fixed;
+	z-index: 1010;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%) translateY(-20px);
+	opacity: 0;
+	transition: opacity var(--pict-modal-transition-duration) ease,
+	            transform var(--pict-modal-transition-duration) ease;
+
+	max-width: 90vw;
+	max-height: 90vh;
+	display: flex;
+	flex-direction: column;
+
+	background: var(--pict-modal-bg);
+	color: var(--pict-modal-fg);
+	border: 1px solid var(--pict-modal-border);
+	border-radius: var(--pict-modal-border-radius);
+	box-shadow: var(--pict-modal-shadow);
+	font-family: var(--pict-modal-font-family);
+	font-size: var(--pict-modal-font-size);
+}
+
+.pict-modal-dialog.pict-modal-visible
+{
+	opacity: 1;
+	transform: translate(-50%, -50%) translateY(0);
+}
+
+/* Unbounded modifier — lets callers opt out of the 90vh/90vw viewport cap.
+   Use with caution: content taller than the viewport will push buttons
+   below the fold. */
+.pict-modal-dialog.pict-modal-dialog--unbounded
+{
+	max-height: none;
+	max-width: none;
+}
+
+.pict-modal-dialog-header
+{
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 12px 16px;
+	background: var(--pict-modal-header-bg);
+	color: var(--pict-modal-header-fg);
+	border-bottom: 1px solid var(--pict-modal-header-border);
+	border-radius: var(--pict-modal-border-radius) var(--pict-modal-border-radius) 0 0;
+}
+
+.pict-modal-dialog-title
+{
+	font-size: var(--pict-modal-title-font-size);
+	font-weight: 600;
+}
+
+.pict-modal-dialog-close
+{
+	background: none;
+	border: none;
+	font-size: 20px;
+	cursor: pointer;
+	color: var(--pict-modal-fg);
+	padding: 0 4px;
+	line-height: 1;
+	opacity: 0.6;
+}
+
+.pict-modal-dialog-close:hover
+{
+	opacity: 1;
+}
+
+.pict-modal-dialog-body
+{
+	padding: 16px;
+	overflow-y: auto;
+	flex: 1;
+}
+
+.pict-modal-dialog-footer
+{
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 12px 16px;
+	border-top: 1px solid var(--pict-modal-border);
+}
+
+/* Buttons */
+.pict-modal-btn
+{
+	padding: 8px 16px;
+	border: none;
+	border-radius: var(--pict-modal-btn-border-radius);
+	font-family: var(--pict-modal-font-family);
+	font-size: var(--pict-modal-font-size);
+	cursor: pointer;
+	background: var(--pict-modal-btn-bg);
+	color: var(--pict-modal-btn-fg);
+	transition: background var(--pict-modal-transition-duration) ease;
+}
+
+.pict-modal-btn:hover
+{
+	background: var(--pict-modal-btn-hover-bg);
+}
+
+.pict-modal-btn:disabled
+{
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.pict-modal-btn--primary
+{
+	background: var(--pict-modal-btn-primary-bg);
+	color: var(--pict-modal-btn-primary-fg);
+}
+
+.pict-modal-btn--primary:hover
+{
+	background: var(--pict-modal-btn-primary-hover-bg);
+}
+
+.pict-modal-btn--danger
+{
+	background: var(--pict-modal-btn-danger-bg);
+	color: var(--pict-modal-btn-danger-fg);
+}
+
+.pict-modal-btn--danger:hover
+{
+	background: var(--pict-modal-btn-danger-hover-bg);
+}
+
+/* Double confirm input */
+.pict-modal-confirm-input
+{
+	width: 100%;
+	padding: 8px 12px;
+	margin-top: 12px;
+	border: 1px solid var(--pict-modal-border);
+	border-radius: var(--pict-modal-btn-border-radius);
+	font-family: var(--pict-modal-font-family);
+	font-size: var(--pict-modal-font-size);
+	box-sizing: border-box;
+}
+
+.pict-modal-confirm-input:focus
+{
+	outline: 2px solid var(--pict-modal-btn-primary-bg);
+	outline-offset: -1px;
+}
+
+.pict-modal-confirm-prompt
+{
+	margin-top: 12px;
+	font-size: 13px;
+	color: var(--pict-modal-fg);
+	opacity: 0.7;
+}
+
+/* Toast container */
+.pict-modal-toast-container
+{
+	position: fixed;
+	z-index: 1030;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	pointer-events: none;
+	max-width: 400px;
+}
+
+.pict-modal-toast-container--top-right
+{
+	top: 16px;
+	right: 16px;
+}
+
+.pict-modal-toast-container--top-left
+{
+	top: 16px;
+	left: 16px;
+}
+
+.pict-modal-toast-container--bottom-right
+{
+	bottom: 16px;
+	right: 16px;
+}
+
+.pict-modal-toast-container--bottom-left
+{
+	bottom: 16px;
+	left: 16px;
+}
+
+.pict-modal-toast-container--top-center
+{
+	top: 16px;
+	left: 50%;
+	transform: translateX(-50%);
+}
+
+.pict-modal-toast-container--bottom-center
+{
+	bottom: 16px;
+	left: 50%;
+	transform: translateX(-50%);
+}
+
+/* Toast */
+.pict-modal-toast
+{
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 16px;
+	border-radius: var(--pict-modal-toast-border-radius);
+	box-shadow: var(--pict-modal-toast-shadow);
+	font-family: var(--pict-modal-font-family);
+	font-size: var(--pict-modal-font-size);
+	background: var(--pict-modal-toast-bg);
+	color: var(--pict-modal-toast-fg);
+	pointer-events: auto;
+	opacity: 0;
+	transform: translateX(100%);
+	transition: opacity var(--pict-modal-transition-duration) ease,
+	            transform var(--pict-modal-transition-duration) ease;
+}
+
+.pict-modal-toast.pict-modal-visible
+{
+	opacity: 1;
+	transform: translateX(0);
+}
+
+.pict-modal-toast.pict-modal-toast-exit
+{
+	opacity: 0;
+	transform: translateX(100%);
+}
+
+.pict-modal-toast--info
+{
+	background: var(--pict-modal-toast-info-bg);
+}
+
+.pict-modal-toast--success
+{
+	background: var(--pict-modal-toast-success-bg);
+}
+
+.pict-modal-toast--warning
+{
+	background: var(--pict-modal-toast-warning-bg);
+}
+
+.pict-modal-toast--error
+{
+	background: var(--pict-modal-toast-error-bg);
+}
+
+.pict-modal-toast-message
+{
+	flex: 1;
+}
+
+.pict-modal-toast-dismiss
+{
+	background: none;
+	border: none;
+	color: inherit;
+	font-size: 18px;
+	cursor: pointer;
+	padding: 0 2px;
+	line-height: 1;
+	opacity: 0.7;
+}
+
+.pict-modal-toast-dismiss:hover
+{
+	opacity: 1;
+}
+
+/* Tooltip */
+.pict-modal-tooltip
+{
+	position: fixed;
+	z-index: 1020;
+	padding: 6px 10px;
+	border-radius: var(--pict-modal-tooltip-border-radius);
+	box-shadow: var(--pict-modal-tooltip-shadow);
+	background: var(--pict-modal-tooltip-bg);
+	color: var(--pict-modal-tooltip-fg);
+	font-family: var(--pict-modal-font-family);
+	font-size: 13px;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity var(--pict-modal-transition-duration) ease;
+	white-space: normal;
+	word-wrap: break-word;
+}
+
+.pict-modal-tooltip.pict-modal-tooltip-interactive
+{
+	pointer-events: auto;
+}
+
+.pict-modal-tooltip.pict-modal-visible
+{
+	opacity: 1;
+}
+
+.pict-modal-tooltip-arrow
+{
+	position: absolute;
+	width: 8px;
+	height: 8px;
+	background: var(--pict-modal-tooltip-bg);
+	transform: rotate(45deg);
+}
+
+.pict-modal-tooltip--top .pict-modal-tooltip-arrow
+{
+	bottom: -4px;
+	left: 50%;
+	margin-left: -4px;
+}
+
+.pict-modal-tooltip--bottom .pict-modal-tooltip-arrow
+{
+	top: -4px;
+	left: 50%;
+	margin-left: -4px;
+}
+
+.pict-modal-tooltip--left .pict-modal-tooltip-arrow
+{
+	right: -4px;
+	top: 50%;
+	margin-top: -4px;
+}
+
+.pict-modal-tooltip--right .pict-modal-tooltip-arrow
+{
+	left: -4px;
+	top: 50%;
+	margin-top: -4px;
+}
+
+/* ── Resizable / Collapsible Panels ──────────────── */
+.pict-panel
+{
+	position: relative;
+	transition: width 0.2s ease;
+	flex-shrink: 0;
+	overflow: visible;
+}
+.pict-panel-collapsed
+{
+	width: 0 !important;
+	min-width: 0 !important;
+	overflow: visible;
+}
+.pict-panel-collapsed > *:not(.pict-panel-edge)
+{
+	display: none;
+}
+
+/* Edge container — zero-width flex sibling of the panel.
+   Sits next to the panel in the flex layout; children
+   use absolute positioning to overlap the panel boundary. */
+.pict-panel-edge
+{
+	position: relative;
+	width: 0;
+	flex-shrink: 0;
+	z-index: 50;
+	overflow: visible;
+}
+
+/* Resize handle — thin strip on the panel boundary */
+.pict-panel-resize
+{
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 4px;
+	cursor: col-resize;
+	background: transparent;
+	transition: background 0.15s, width 0.15s;
+}
+.pict-panel-edge-right .pict-panel-resize
+{
+	right: 0;
+	border-right: 1px solid var(--pict-panel-border, #DDD6CA);
+}
+.pict-panel-edge-left .pict-panel-resize
+{
+	left: 0;
+	border-left: 1px solid var(--pict-panel-border, #DDD6CA);
+}
+.pict-panel-resize:hover,
+.pict-panel-edge:hover .pict-panel-resize
+{
+	width: 5px;
+	background: var(--pict-panel-accent, #2E7D74);
+	opacity: 0.5;
+}
+.pict-panel-resize.dragging
+{
+	width: 5px;
+	background: var(--pict-panel-accent, #2E7D74);
+	opacity: 1;
+	transition: none;
+}
+.pict-panel-edge-collapsed .pict-panel-resize
+{
+	display: none;
+}
+
+/* Collapse tab — tucked sliver at rest, slides out on hover */
+.pict-panel-tab
+{
+	position: absolute;
+	top: 8px;
+	width: 8px;
+	height: 24px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	background: var(--pict-panel-border, #DDD6CA);
+	border: 1px solid var(--pict-panel-border, #DDD6CA);
+	cursor: pointer;
+	color: var(--pict-panel-fg, #8A7F72);
+	font-size: 10px;
+	line-height: 1;
+	opacity: 0.5;
+	transition: opacity 0.25s, width 0.2s ease, height 0.2s ease, left 0.2s ease, right 0.2s ease, background 0.2s;
+	z-index: 51;
+}
+.pict-panel-edge:hover .pict-panel-tab,
+.pict-panel-tab:hover
+{
+	width: 20px;
+	height: 32px;
+	opacity: 1;
+	overflow: visible;
+	background: var(--pict-panel-bg, #FAF8F4);
+}
+/* Right panel: tab to the left of the edge */
+.pict-panel-edge-right .pict-panel-tab
+{
+	right: 0;
+	border-right: none;
+	border-radius: 4px 0 0 4px;
+}
+.pict-panel-edge-right:hover .pict-panel-tab,
+.pict-panel-edge-right .pict-panel-tab:hover
+{
+	right: 0;
+}
+/* Left panel: tab to the right of the edge */
+.pict-panel-edge-left .pict-panel-tab
+{
+	left: 0;
+	border-left: none;
+	border-radius: 0 4px 4px 0;
+}
+.pict-panel-edge-left:hover .pict-panel-tab,
+.pict-panel-edge-left .pict-panel-tab:hover
+{
+	left: 0;
+}
+/* When collapsed — more visible */
+.pict-panel-edge-collapsed .pict-panel-tab
+{
+	width: 10px;
+	height: 28px;
+	opacity: 0.6;
+}
+.pict-panel-edge-collapsed .pict-panel-tab:hover,
+.pict-panel-edge-collapsed:hover .pict-panel-tab
+{
+	width: 20px;
+	height: 32px;
+	opacity: 1;
+	overflow: visible;
+	background: var(--pict-panel-bg, #FAF8F4);
+}
+`
+      };
+    }, {}],
+    30: [function (require, module, exports) {
+      const libPictViewClass = require('pict-view');
+      const libPictModalOverlay = require('./Pict-Modal-Overlay.js');
+      const libPictModalConfirm = require('./Pict-Modal-Confirm.js');
+      const libPictModalWindow = require('./Pict-Modal-Window.js');
+      const libPictModalToast = require('./Pict-Modal-Toast.js');
+      const libPictModalTooltip = require('./Pict-Modal-Tooltip.js');
+      const libPictModalPanel = require('./Pict-Modal-Panel.js');
+      const _DefaultConfiguration = require('./Pict-Section-Modal-DefaultConfiguration.js');
+      class PictSectionModal extends libPictViewClass {
+        constructor(pFable, pOptions, pServiceHash) {
+          let tmpOptions = Object.assign({}, _DefaultConfiguration, pOptions);
+          super(pFable, tmpOptions, pServiceHash);
+          this._activeModals = [];
+          this._activeTooltips = [];
+          this._activeToasts = [];
+          this._idCounter = 0;
+          this._overlay = new libPictModalOverlay(this);
+          this._confirm = new libPictModalConfirm(this);
+          this._window = new libPictModalWindow(this);
+          this._toast = new libPictModalToast(this);
+          this._tooltip = new libPictModalTooltip(this);
+          this._panel = new libPictModalPanel(this);
+        }
+        onBeforeInitialize() {
+          super.onBeforeInitialize();
+
+          // Ensure the root class is on the body for CSS variable scoping
+          if (typeof document !== 'undefined' && document.body) {
+            if (!document.body.classList.contains('pict-modal-root')) {
+              document.body.classList.add('pict-modal-root');
+            }
+          }
+          return super.onBeforeInitialize();
+        }
+
+        /**
+         * Generate a unique ID for DOM elements.
+         *
+         * @returns {number}
+         */
+        _nextId() {
+          this._idCounter++;
+          return this._idCounter;
+        }
+
+        // -- Confirm API --
+
+        /**
+         * Show a confirmation dialog.
+         *
+         * @param {string} pMessage - The confirmation message
+         * @param {object} [pOptions] - Options { title, confirmLabel, cancelLabel, dangerous }
+         * @returns {Promise<boolean>}
+         */
+        confirm(pMessage, pOptions) {
+          return this._confirm.confirm(pMessage, pOptions);
+        }
+
+        /**
+         * Show a two-step confirmation dialog.
+         *
+         * If confirmPhrase is set, the user must type it to enable the confirm button.
+         * If no confirmPhrase, the first click changes the button text and the second click confirms.
+         *
+         * @param {string} pMessage - The confirmation message
+         * @param {object} [pOptions] - Options { title, confirmPhrase, phrasePrompt, confirmLabel, cancelLabel }
+         * @returns {Promise<boolean>}
+         */
+        doubleConfirm(pMessage, pOptions) {
+          return this._confirm.doubleConfirm(pMessage, pOptions);
+        }
+
+        // -- Modal Window API --
+
+        /**
+         * Show a custom modal window.
+         *
+         * @param {object} [pOptions] - Options { title, content, buttons, closeable, width, onOpen, onClose }
+         * @returns {Promise<string|null>} Resolves with the clicked button Hash, or null on close
+         */
+        show(pOptions) {
+          return this._window.show(pOptions);
+        }
+
+        // -- Tooltip API --
+
+        /**
+         * Attach a simple text tooltip to an element.
+         *
+         * @param {HTMLElement} pElement - Target element
+         * @param {string} pText - Tooltip text
+         * @param {object} [pOptions] - Options { position, delay, maxWidth }
+         * @returns {{ destroy: function }}
+         */
+        tooltip(pElement, pText, pOptions) {
+          return this._tooltip.tooltip(pElement, pText, pOptions);
+        }
+
+        /**
+         * Attach a rich HTML tooltip to an element.
+         *
+         * @param {HTMLElement} pElement - Target element
+         * @param {string} pHTMLContent - HTML content
+         * @param {object} [pOptions] - Options { position, delay, maxWidth, interactive }
+         * @returns {{ destroy: function }}
+         */
+        richTooltip(pElement, pHTMLContent, pOptions) {
+          return this._tooltip.richTooltip(pElement, pHTMLContent, pOptions);
+        }
+
+        // -- Toast API --
+
+        /**
+         * Show a toast notification.
+         *
+         * @param {string} pMessage - Toast message
+         * @param {object} [pOptions] - Options { type, duration, position, dismissible }
+         * @returns {{ dismiss: function }}
+         */
+        toast(pMessage, pOptions) {
+          return this._toast.toast(pMessage, pOptions);
+        }
+
+        // -- Panel API --
+
+        /**
+         * Attach resizable/collapsible panel behavior to a DOM element.
+         *
+         * @param {string} pTargetSelector - CSS selector for the panel element
+         * @param {object} [pOptions] - Options { position, width, minWidth, maxWidth, collapsible, collapsed, persist, persistKey, onResize, onToggle }
+         * @returns {{ collapse, expand, toggle, setWidth, destroy }} Panel handle
+         */
+        panel(pTargetSelector, pOptions) {
+          return this._panel.create(pTargetSelector, pOptions);
+        }
+
+        // -- Cleanup API --
+
+        /**
+         * Dismiss all open modals.
+         */
+        dismissModals() {
+          let tmpModals = this._activeModals.slice();
+          for (let i = tmpModals.length - 1; i >= 0; i--) {
+            tmpModals[i].dismiss(null);
+          }
+        }
+
+        /**
+         * Dismiss all active tooltips.
+         */
+        dismissTooltips() {
+          this._tooltip.dismissAll();
+        }
+
+        /**
+         * Dismiss all active toasts.
+         */
+        dismissToasts() {
+          this._toast.dismissAll();
+        }
+
+        /**
+         * Dismiss everything: modals, tooltips, and toasts.
+         */
+        dismissAll() {
+          this.dismissModals();
+          this.dismissTooltips();
+          this.dismissToasts();
+        }
+
+        /**
+         * Clean up all DOM elements when the view is destroyed.
+         */
+        /**
+         * Destroy all active panels.
+         */
+        destroyPanels() {
+          this._panel.destroyAll();
+        }
+        destroy() {
+          this.dismissAll();
+          this.destroyPanels();
+          this._overlay.destroy();
+          this._toast.destroy();
+          if (typeof super.destroy === 'function') {
+            return super.destroy();
+          }
+        }
+      }
+      module.exports = PictSectionModal;
+      module.exports.default_configuration = _DefaultConfiguration;
+    }, {
+      "./Pict-Modal-Confirm.js": 23,
+      "./Pict-Modal-Overlay.js": 24,
+      "./Pict-Modal-Panel.js": 25,
+      "./Pict-Modal-Toast.js": 26,
+      "./Pict-Modal-Tooltip.js": 27,
+      "./Pict-Modal-Window.js": 28,
+      "./Pict-Section-Modal-DefaultConfiguration.js": 29,
+      "pict-view": 32
+    }],
+    31: [function (require, module, exports) {
       module.exports = {
         "name": "pict-view",
         "version": "1.0.68",
@@ -1526,7 +6917,7 @@
         }
       };
     }, {}],
-    6: [function (require, module, exports) {
+    32: [function (require, module, exports) {
       const libFableServiceBase = require('fable-serviceproviderbase');
       const libPackage = require('../package.json');
       const defaultPictViewSettings = {
@@ -2713,1344 +8104,9 @@
       }
       module.exports = PictView;
     }, {
-      "../package.json": 5,
-      "fable-serviceproviderbase": 2
-    }],
-    7: [function (require, module, exports) {
-      /**
-       * Retold DataMapper — Pict Application
-       *
-       * Shell for the visual mapping editor. Registers the MapperAPI provider
-       * and all views, seeds AppData, and renders the Layout view.
-       */
-      const libPictApplication = require('pict-application');
-      const libMapperAPIProvider = require('./providers/Pict-Provider-MapperAPI.js');
-      const libViewLayout = require('./views/PictView-Mapper-Layout.js');
-      const libViewBeaconBrowser = require('./views/PictView-Mapper-BeaconBrowser.js');
-      const libViewFieldMapper = require('./views/PictView-Mapper-FieldMapper.js');
-      const libViewMappingList = require('./views/PictView-Mapper-MappingList.js');
-      const libViewJSONEditor = require('./views/PictView-Mapper-JSONEditor.js');
-      class DataMapperApplication extends libPictApplication {
-        constructor(pFable, pOptions, pServiceHash) {
-          super(pFable, pOptions, pServiceHash);
-          this.serviceType = 'DataMapperApplication';
-          this.pict.addProvider('MapperAPI', libMapperAPIProvider.default_configuration, libMapperAPIProvider);
-          this.pict.addView('Mapper-Layout', libViewLayout.default_configuration, libViewLayout);
-          this.pict.addView('Mapper-BeaconBrowser', libViewBeaconBrowser.default_configuration, libViewBeaconBrowser);
-          this.pict.addView('Mapper-FieldMapper', libViewFieldMapper.default_configuration, libViewFieldMapper);
-          this.pict.addView('Mapper-MappingList', libViewMappingList.default_configuration, libViewMappingList);
-          this.pict.addView('Mapper-JSONEditor', libViewJSONEditor.default_configuration, libViewJSONEditor);
-        }
-        onAfterInitializeAsync(fCallback) {
-          if (!this.pict.AppData) this.pict.AppData = {};
-          this.pict.AppData.Mapper = {
-            UltravisorURL: '',
-            UltravisorStatus: 'Disconnected',
-            UltravisorStatusLabel: 'Disconnected',
-            UltravisorBadgeClass: 'badge-neutral',
-            Beacons: [],
-            SourceBeacons: [],
-            TargetBeacons: [],
-            SourceBeaconName: '',
-            SourceConnections: [],
-            SourceConnectionID: null,
-            SourceConnectionHash: '',
-            SourceEntities: [],
-            SourceEntity: '',
-            SourceFields: [],
-            TargetBeaconName: '',
-            TargetConnections: [],
-            TargetConnectionID: null,
-            TargetConnectionHash: '',
-            TargetEntities: [],
-            TargetEntity: '',
-            TargetFields: [],
-            SelectedSourceField: '',
-            Mappings: [],
-            SavedMappings: [],
-            ActivePanel: 'mapper',
-            // mapper | mappings | json
-
-            StatusMessage: 'Ready',
-            JSONText: ''
-          };
-          if (typeof window !== 'undefined') window.DataMapperApp = this;
-          this.pict.views['Mapper-Layout'].render();
-          let tmpProvider = this.pict.providers.MapperAPI;
-          if (tmpProvider) {
-            tmpProvider.loadUltravisorStatus(() => {
-              tmpProvider.loadBeacons();
-              tmpProvider.loadSavedMappings();
-            });
-          }
-          return super.onAfterInitializeAsync(fCallback);
-        }
-        setActivePanel(pPanelName) {
-          if (this.pict.views['Mapper-Layout'] && typeof this.pict.views['Mapper-Layout'].setActivePanel === 'function') {
-            this.pict.views['Mapper-Layout'].setActivePanel(pPanelName);
-          }
-        }
-      }
-      module.exports = DataMapperApplication;
-      module.exports.default_configuration = {};
-    }, {
-      "./providers/Pict-Provider-MapperAPI.js": 9,
-      "./views/PictView-Mapper-BeaconBrowser.js": 10,
-      "./views/PictView-Mapper-FieldMapper.js": 11,
-      "./views/PictView-Mapper-JSONEditor.js": 12,
-      "./views/PictView-Mapper-Layout.js": 13,
-      "./views/PictView-Mapper-MappingList.js": 14,
-      "pict-application": 4
-    }],
-    8: [function (require, module, exports) {
-      /**
-       * Retold DataMapper — Browser Bundle Entry
-       *
-       * Quackage (browserify) processes this file to produce retold-data-mapper.js.
-       */
-      let libPictApplication = require('pict-application');
-      let libPictView = require('pict-view');
-      let libDataMapperApplication = require('./Pict-Application-DataMapper.js');
-      let libMapperAPIProvider = require('./providers/Pict-Provider-MapperAPI.js');
-      let libViewLayout = require('./views/PictView-Mapper-Layout.js');
-      let libViewBeaconBrowser = require('./views/PictView-Mapper-BeaconBrowser.js');
-      let libViewFieldMapper = require('./views/PictView-Mapper-FieldMapper.js');
-      let libViewMappingList = require('./views/PictView-Mapper-MappingList.js');
-      let libViewJSONEditor = require('./views/PictView-Mapper-JSONEditor.js');
-      window.DataMapperApplication = libDataMapperApplication;
-    }, {
-      "./Pict-Application-DataMapper.js": 7,
-      "./providers/Pict-Provider-MapperAPI.js": 9,
-      "./views/PictView-Mapper-BeaconBrowser.js": 10,
-      "./views/PictView-Mapper-FieldMapper.js": 11,
-      "./views/PictView-Mapper-JSONEditor.js": 12,
-      "./views/PictView-Mapper-Layout.js": 13,
-      "./views/PictView-Mapper-MappingList.js": 14,
-      "pict-application": 4,
-      "pict-view": 6
-    }],
-    9: [function (require, module, exports) {
-      /**
-       * Retold DataMapper — API Provider
-       *
-       * Calls the DataMapper's own REST API at /mapper/* and stores results in
-       * AppData. The server-side dispatches foreign-beacon calls through the
-       * Ultravisor mesh, so this provider never has to know about mesh routing.
-       */
-      const libPictProvider = require('pict-view');
-      class MapperAPIProvider extends libPictProvider {
-        constructor(pFable, pOptions, pServiceHash) {
-          super(pFable, pOptions, pServiceHash);
-          this.serviceType = 'MapperAPIProvider';
-        }
-        _apiCall(pMethod, pPath, pBody, fCallback) {
-          let tmpOptions = {
-            method: pMethod,
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          };
-          if (pBody && pMethod !== 'GET') {
-            tmpOptions.body = JSON.stringify(pBody);
-          }
-          fetch(pPath, tmpOptions).then(pResponse => pResponse.json()).then(pData => {
-            if (fCallback) fCallback(null, pData);
-          }).catch(pError => {
-            if (fCallback) fCallback(pError);
-          });
-        }
-
-        // ── Ultravisor ──────────────────────────────────────────
-
-        loadUltravisorStatus(fCallback) {
-          this._apiCall('GET', '/mapper/ultravisor/status', null, (pError, pData) => {
-            if (!pError && pData) {
-              this._applyUltravisorStatus(pData);
-            }
-            this._renderLayout();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        connectUltravisor(pURL, pBeaconName, fCallback) {
-          this._apiCall('POST', '/mapper/ultravisor/connect', {
-            URL: pURL,
-            BeaconName: pBeaconName || 'retold-data-mapper'
-          }, (pError, pData) => {
-            if (!pError && pData) {
-              this._applyUltravisorStatus(pData);
-            }
-            this._renderLayout();
-            if (!pError && pData && pData.Success) {
-              this.loadBeacons();
-            }
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        disconnectUltravisor(fCallback) {
-          this._apiCall('POST', '/mapper/ultravisor/disconnect', null, (pError, pData) => {
-            this.pict.AppData.Mapper.UltravisorStatus = 'Disconnected';
-            this.pict.AppData.Mapper.UltravisorStatusLabel = 'Disconnected';
-            this.pict.AppData.Mapper.UltravisorBadgeClass = 'badge-neutral';
-            this.pict.AppData.Mapper.Beacons = [];
-            this.pict.AppData.Mapper.SourceBeacons = [];
-            this.pict.AppData.Mapper.TargetBeacons = [];
-            this._renderLayout();
-            this._renderBeaconBrowser();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        _applyUltravisorStatus(pData) {
-          let tmpStatus = pData.Status || (pData.Connected ? 'Connected' : 'Disconnected');
-          let tmpLabel = tmpStatus;
-          let tmpBadge = 'badge-neutral';
-          if (pData.Connected) {
-            tmpBadge = 'badge-success';
-          } else if (tmpStatus === 'Failed') {
-            tmpBadge = 'badge-error';
-          }
-          this.pict.AppData.Mapper.UltravisorStatus = tmpStatus;
-          this.pict.AppData.Mapper.UltravisorStatusLabel = tmpLabel;
-          this.pict.AppData.Mapper.UltravisorBadgeClass = tmpBadge;
-          this.pict.AppData.Mapper.UltravisorURL = pData.URL || this.pict.AppData.Mapper.UltravisorURL;
-        }
-
-        // ── Beacons ─────────────────────────────────────────────
-
-        loadBeacons(fCallback) {
-          this._apiCall('GET', '/mapper/beacons', null, (pError, pData) => {
-            if (!pError && pData) {
-              this.pict.AppData.Mapper.Beacons = pData.Beacons || [];
-              this._recomputeBeaconOptions();
-            }
-            this._renderBeaconBrowser();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        loadSourceConnections(pBeaconName, fCallback) {
-          this.pict.AppData.Mapper.SourceBeaconName = pBeaconName;
-          this.pict.AppData.Mapper.SourceConnections = [];
-          this.pict.AppData.Mapper.SourceConnectionID = null;
-          this.pict.AppData.Mapper.SourceConnectionHash = '';
-          this.pict.AppData.Mapper.SourceEntities = [];
-          this.pict.AppData.Mapper.SourceEntity = '';
-          this.pict.AppData.Mapper.SourceFields = [];
-          if (!pBeaconName) {
-            this._recomputeBeaconOptions();
-            this._renderBeaconBrowser();
-            this._renderFieldMapper();
-            if (fCallback) fCallback();
-            return;
-          }
-          this._apiCall('GET', `/mapper/beacon/${encodeURIComponent(pBeaconName)}/connections`, null, (pError, pData) => {
-            if (!pError && pData) {
-              this.pict.AppData.Mapper.SourceConnections = pData.Connections || [];
-            }
-            this._recomputeBeaconOptions();
-            this._renderBeaconBrowser();
-            this._renderFieldMapper();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        loadTargetConnections(pBeaconName, fCallback) {
-          this.pict.AppData.Mapper.TargetBeaconName = pBeaconName;
-          this.pict.AppData.Mapper.TargetConnections = [];
-          this.pict.AppData.Mapper.TargetConnectionID = null;
-          this.pict.AppData.Mapper.TargetConnectionHash = '';
-          this.pict.AppData.Mapper.TargetEntities = [];
-          this.pict.AppData.Mapper.TargetEntity = '';
-          this.pict.AppData.Mapper.TargetFields = [];
-          if (!pBeaconName) {
-            this._recomputeBeaconOptions();
-            this._renderBeaconBrowser();
-            this._renderFieldMapper();
-            if (fCallback) fCallback();
-            return;
-          }
-          this._apiCall('GET', `/mapper/beacon/${encodeURIComponent(pBeaconName)}/connections`, null, (pError, pData) => {
-            if (!pError && pData) {
-              this.pict.AppData.Mapper.TargetConnections = pData.Connections || [];
-            }
-            this._recomputeBeaconOptions();
-            this._renderBeaconBrowser();
-            this._renderFieldMapper();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        introspectSource(pIDBeaconConnection, fCallback) {
-          let tmpBeaconName = this.pict.AppData.Mapper.SourceBeaconName;
-          if (!tmpBeaconName || !pIDBeaconConnection) {
-            if (fCallback) fCallback(new Error('beacon + id required'));
-            return;
-          }
-          this.pict.AppData.Mapper.SourceConnectionID = pIDBeaconConnection;
-          let tmpConn = this._findConnection(this.pict.AppData.Mapper.SourceConnections, pIDBeaconConnection);
-          this.pict.AppData.Mapper.SourceConnectionHash = this._slugify(tmpConn ? tmpConn.Name : '');
-          this._apiCall('POST', `/mapper/beacon/${encodeURIComponent(tmpBeaconName)}/introspect`, {
-            IDBeaconConnection: pIDBeaconConnection
-          }, (pError, pData) => {
-            if (!pError && pData) {
-              this.pict.AppData.Mapper.SourceEntities = pData.Tables || [];
-              if (pData.ConnectionHash) {
-                this.pict.AppData.Mapper.SourceConnectionHash = pData.ConnectionHash;
-              }
-            }
-            this._recomputeBeaconOptions();
-            this._renderBeaconBrowser();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        introspectTarget(pIDBeaconConnection, fCallback) {
-          let tmpBeaconName = this.pict.AppData.Mapper.TargetBeaconName;
-          if (!tmpBeaconName || !pIDBeaconConnection) {
-            if (fCallback) fCallback(new Error('beacon + id required'));
-            return;
-          }
-          this.pict.AppData.Mapper.TargetConnectionID = pIDBeaconConnection;
-          let tmpConn = this._findConnection(this.pict.AppData.Mapper.TargetConnections, pIDBeaconConnection);
-          this.pict.AppData.Mapper.TargetConnectionHash = this._slugify(tmpConn ? tmpConn.Name : '');
-          this._apiCall('POST', `/mapper/beacon/${encodeURIComponent(tmpBeaconName)}/introspect`, {
-            IDBeaconConnection: pIDBeaconConnection
-          }, (pError, pData) => {
-            if (!pError && pData) {
-              this.pict.AppData.Mapper.TargetEntities = pData.Tables || [];
-              if (pData.ConnectionHash) {
-                this.pict.AppData.Mapper.TargetConnectionHash = pData.ConnectionHash;
-              }
-            }
-            this._recomputeBeaconOptions();
-            this._renderBeaconBrowser();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        setSourceEntity(pEntityName) {
-          this.pict.AppData.Mapper.SourceEntity = pEntityName;
-          let tmpEntity = this._findEntity(this.pict.AppData.Mapper.SourceEntities, pEntityName);
-          this.pict.AppData.Mapper.SourceFields = this._extractFields(tmpEntity);
-          this._recomputeBeaconOptions();
-          this._renderBeaconBrowser();
-          this._renderFieldMapper();
-        }
-        setTargetEntity(pEntityName) {
-          this.pict.AppData.Mapper.TargetEntity = pEntityName;
-          let tmpEntity = this._findEntity(this.pict.AppData.Mapper.TargetEntities, pEntityName);
-          this.pict.AppData.Mapper.TargetFields = this._extractFields(tmpEntity);
-          this._recomputeBeaconOptions();
-          this._renderBeaconBrowser();
-          this._renderFieldMapper();
-        }
-
-        // ── Mappings ────────────────────────────────────────────
-
-        selectSourceField(pFieldName) {
-          let tmpCurrent = this.pict.AppData.Mapper.SelectedSourceField;
-          this.pict.AppData.Mapper.SelectedSourceField = tmpCurrent === pFieldName ? '' : pFieldName;
-          this._renderFieldMapper();
-        }
-        addMapping(pSource, pTarget) {
-          if (!pSource || !pTarget) {
-            return;
-          }
-          let tmpMappings = this.pict.AppData.Mapper.Mappings || [];
-          tmpMappings = tmpMappings.filter(pM => pM.Target !== pTarget);
-          tmpMappings.push({
-            Source: pSource,
-            Target: pTarget
-          });
-          this.pict.AppData.Mapper.Mappings = tmpMappings;
-          this.pict.AppData.Mapper.SelectedSourceField = '';
-          this._regenerateJSON();
-          this._renderFieldMapper();
-        }
-        removeMapping(pIndex) {
-          let tmpMappings = this.pict.AppData.Mapper.Mappings || [];
-          tmpMappings.splice(pIndex, 1);
-          this.pict.AppData.Mapper.Mappings = tmpMappings;
-          this._regenerateJSON();
-          this._renderFieldMapper();
-        }
-        clearMappings() {
-          this.pict.AppData.Mapper.Mappings = [];
-          this.pict.AppData.Mapper.SelectedSourceField = '';
-          this._regenerateJSON();
-          this._renderFieldMapper();
-        }
-
-        // ── Saved MappingConfigs (CRUD against our own SQLite) ──
-
-        loadSavedMappings(fCallback) {
-          this._apiCall('GET', '/mapper/mappings', null, (pError, pData) => {
-            if (!pError && pData) {
-              this.pict.AppData.Mapper.SavedMappings = pData.Mappings || [];
-            }
-            this._renderMappingList();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        saveMapping(fCallback) {
-          let tmpState = this.pict.AppData.Mapper;
-          let tmpConfig = this._buildMappingConfiguration();
-          let tmpBody = {
-            Name: tmpState.TargetEntity ? `${tmpState.SourceEntity || 'source'} → ${tmpState.TargetEntity}` : 'Untitled Mapping',
-            Description: '',
-            SourceBeaconName: tmpState.SourceBeaconName,
-            SourceConnectionHash: tmpState.SourceConnectionHash,
-            SourceEntity: tmpState.SourceEntity,
-            TargetBeaconName: tmpState.TargetBeaconName,
-            TargetConnectionHash: tmpState.TargetConnectionHash,
-            TargetEntity: tmpState.TargetEntity,
-            MappingConfiguration: tmpConfig,
-            FlowDiagramState: {}
-          };
-          this._apiCall('POST', '/mapper/mappings', tmpBody, (pError, pData) => {
-            if (!pError && pData && pData.Success) {
-              this.pict.AppData.Mapper.StatusMessage = 'Mapping saved.';
-              this.loadSavedMappings();
-            } else {
-              this.pict.AppData.Mapper.StatusMessage = 'Save failed.';
-            }
-            this._renderLayout();
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        deleteSavedMapping(pID, fCallback) {
-          this._apiCall('DELETE', `/mapper/mapping/${pID}`, null, (pError, pData) => {
-            if (!pError) {
-              this.loadSavedMappings();
-            }
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        loadSavedMapping(pID, fCallback) {
-          this._apiCall('GET', `/mapper/mapping/${pID}`, null, (pError, pData) => {
-            if (!pError && pData && pData.Mapping) {
-              this._applySavedMapping(pData.Mapping);
-            }
-            if (fCallback) fCallback(pError, pData);
-          });
-        }
-        _applySavedMapping(pRecord) {
-          let tmpState = this.pict.AppData.Mapper;
-          tmpState.SourceBeaconName = pRecord.SourceBeaconName || '';
-          tmpState.SourceConnectionHash = pRecord.SourceConnectionHash || '';
-          tmpState.SourceEntity = pRecord.SourceEntity || '';
-          tmpState.TargetBeaconName = pRecord.TargetBeaconName || '';
-          tmpState.TargetConnectionHash = pRecord.TargetConnectionHash || '';
-          tmpState.TargetEntity = pRecord.TargetEntity || '';
-          let tmpConfig = {};
-          try {
-            tmpConfig = JSON.parse(pRecord.MappingConfiguration || '{}');
-          } catch (e) {/* ignore */}
-          tmpState.Mappings = this._mappingsFromConfig(tmpConfig);
-          tmpState.JSONText = JSON.stringify(tmpConfig, null, '\t');
-          tmpState.StatusMessage = `Loaded "${pRecord.Name}".`;
-          tmpState.ActivePanel = 'mapper';
-
-          // If source/target fields aren't loaded, derive placeholders from mappings
-          if (tmpState.SourceFields.length === 0) {
-            let tmpSet = {};
-            tmpState.Mappings.forEach(pM => {
-              if (pM.Source) tmpSet[pM.Source] = true;
-            });
-            tmpState.SourceFields = Object.keys(tmpSet).map(pN => ({
-              Name: pN,
-              Type: ''
-            }));
-          }
-          if (tmpState.TargetFields.length === 0) {
-            let tmpSet = {};
-            tmpState.Mappings.forEach(pM => {
-              if (pM.Target) tmpSet[pM.Target] = true;
-            });
-            tmpState.TargetFields = Object.keys(tmpSet).map(pN => ({
-              Name: pN,
-              Type: ''
-            }));
-          }
-          this._recomputeBeaconOptions();
-          this._renderLayout();
-          this._renderBeaconBrowser();
-          this._renderFieldMapper();
-          this._renderJSONEditor();
-        }
-
-        // ── JSON editor sync ────────────────────────────────────
-
-        applyJSONText(pText) {
-          let tmpParsed;
-          try {
-            tmpParsed = JSON.parse(pText);
-          } catch (e) {
-            this.pict.AppData.Mapper.StatusMessage = `Invalid JSON: ${e.message}`;
-            this._renderLayout();
-            return false;
-          }
-          if (!tmpParsed || !tmpParsed.Mappings) {
-            this.pict.AppData.Mapper.StatusMessage = 'JSON must contain a "Mappings" object.';
-            this._renderLayout();
-            return false;
-          }
-          this.pict.AppData.Mapper.JSONText = JSON.stringify(tmpParsed, null, '\t');
-          this.pict.AppData.Mapper.Mappings = this._mappingsFromConfig(tmpParsed);
-          if (tmpParsed.Entity) {
-            this.pict.AppData.Mapper.TargetEntity = tmpParsed.Entity;
-          }
-          if (tmpParsed._meta) {
-            if (tmpParsed._meta.SourceBeacon) this.pict.AppData.Mapper.SourceBeaconName = tmpParsed._meta.SourceBeacon;
-            if (tmpParsed._meta.SourceConnectionHash) this.pict.AppData.Mapper.SourceConnectionHash = tmpParsed._meta.SourceConnectionHash;
-            if (tmpParsed._meta.TargetBeacon) this.pict.AppData.Mapper.TargetBeaconName = tmpParsed._meta.TargetBeacon;
-            if (tmpParsed._meta.TargetConnectionHash) this.pict.AppData.Mapper.TargetConnectionHash = tmpParsed._meta.TargetConnectionHash;
-          }
-          this.pict.AppData.Mapper.StatusMessage = `Imported ${this.pict.AppData.Mapper.Mappings.length} mappings.`;
-          this._renderLayout();
-          this._renderBeaconBrowser();
-          this._renderFieldMapper();
-          return true;
-        }
-
-        // ── Helpers ─────────────────────────────────────────────
-
-        _buildMappingConfiguration() {
-          let tmpState = this.pict.AppData.Mapper;
-          let tmpMappings = {};
-          (tmpState.Mappings || []).forEach(pM => {
-            tmpMappings[pM.Target] = '{~D:Record.' + pM.Source + '~}';
-          });
-          let tmpEntity = tmpState.TargetEntity || 'TargetEntity';
-          return {
-            Entity: tmpEntity,
-            GUIDTemplate: '',
-            GUIDName: 'GUID' + tmpEntity,
-            Mappings: tmpMappings,
-            Solvers: [],
-            _meta: {
-              SourceBeacon: tmpState.SourceBeaconName,
-              SourceConnectionHash: tmpState.SourceConnectionHash,
-              SourceEntity: tmpState.SourceEntity,
-              TargetBeacon: tmpState.TargetBeaconName,
-              TargetConnectionHash: tmpState.TargetConnectionHash
-            }
-          };
-        }
-        _mappingsFromConfig(pConfig) {
-          let tmpMappings = [];
-          let tmpSource = pConfig && pConfig.Mappings ? pConfig.Mappings : {};
-          let tmpKeys = Object.keys(tmpSource);
-          for (let i = 0; i < tmpKeys.length; i++) {
-            let tmpTarget = tmpKeys[i];
-            let tmpExpr = tmpSource[tmpTarget];
-            let tmpMatch = typeof tmpExpr === 'string' ? tmpExpr.match(/^\{~D:Record\.(\w+)~\}$/) : null;
-            tmpMappings.push({
-              Source: tmpMatch ? tmpMatch[1] : String(tmpExpr),
-              Target: tmpTarget
-            });
-          }
-          return tmpMappings;
-        }
-        _regenerateJSON() {
-          this.pict.AppData.Mapper.JSONText = JSON.stringify(this._buildMappingConfiguration(), null, '\t');
-        }
-        _slugify(pValue) {
-          return String(pValue || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-        }
-        _findConnection(pConnections, pID) {
-          let tmpList = pConnections || [];
-          for (let i = 0; i < tmpList.length; i++) {
-            if (String(tmpList[i].IDBeaconConnection) === String(pID)) return tmpList[i];
-          }
-          return null;
-        }
-        _findEntity(pEntities, pName) {
-          let tmpList = pEntities || [];
-          for (let i = 0; i < tmpList.length; i++) {
-            if (tmpList[i].TableName === pName) return tmpList[i];
-          }
-          return null;
-        }
-        _extractFields(pEntity) {
-          if (!pEntity) return [];
-          let tmpCols = pEntity.Columns || [];
-          let tmpFields = [];
-          for (let i = 0; i < tmpCols.length; i++) {
-            tmpFields.push({
-              Name: tmpCols[i].Name || tmpCols[i].Column,
-              Type: tmpCols[i].NativeType || tmpCols[i].MeadowType || ''
-            });
-          }
-          return tmpFields;
-        }
-        _recomputeBeaconOptions() {
-          let tmpState = this.pict.AppData.Mapper;
-          let tmpBeacons = tmpState.Beacons || [];
-          tmpState.SourceBeacons = tmpBeacons.map(pB => ({
-            Name: pB.Name,
-            BeaconID: pB.BeaconID,
-            SelectedAttr: pB.Name === tmpState.SourceBeaconName ? 'selected' : ''
-          }));
-          tmpState.TargetBeacons = tmpBeacons.map(pB => ({
-            Name: pB.Name,
-            BeaconID: pB.BeaconID,
-            SelectedAttr: pB.Name === tmpState.TargetBeaconName ? 'selected' : ''
-          }));
-          tmpState.SourceConnectionsForTemplate = (tmpState.SourceConnections || []).map(pC => ({
-            IDBeaconConnection: pC.IDBeaconConnection,
-            Name: pC.Name,
-            Type: pC.Type,
-            SelectedAttr: String(pC.IDBeaconConnection) === String(tmpState.SourceConnectionID) ? 'selected' : ''
-          }));
-          tmpState.TargetConnectionsForTemplate = (tmpState.TargetConnections || []).map(pC => ({
-            IDBeaconConnection: pC.IDBeaconConnection,
-            Name: pC.Name,
-            Type: pC.Type,
-            SelectedAttr: String(pC.IDBeaconConnection) === String(tmpState.TargetConnectionID) ? 'selected' : ''
-          }));
-          tmpState.SourceEntitiesForTemplate = (tmpState.SourceEntities || []).map(pE => ({
-            TableName: pE.TableName,
-            ColumnCount: (pE.Columns || []).length,
-            SelectedAttr: pE.TableName === tmpState.SourceEntity ? 'selected' : ''
-          }));
-          tmpState.TargetEntitiesForTemplate = (tmpState.TargetEntities || []).map(pE => ({
-            TableName: pE.TableName,
-            ColumnCount: (pE.Columns || []).length,
-            SelectedAttr: pE.TableName === tmpState.TargetEntity ? 'selected' : ''
-          }));
-        }
-        _renderLayout() {
-          if (this.pict.views['Mapper-Layout']) this.pict.views['Mapper-Layout'].render();
-        }
-        _renderBeaconBrowser() {
-          if (this.pict.views['Mapper-BeaconBrowser']) this.pict.views['Mapper-BeaconBrowser'].render();
-        }
-        _renderFieldMapper() {
-          if (this.pict.views['Mapper-FieldMapper']) this.pict.views['Mapper-FieldMapper'].render();
-        }
-        _renderMappingList() {
-          if (this.pict.views['Mapper-MappingList']) this.pict.views['Mapper-MappingList'].render();
-        }
-        _renderJSONEditor() {
-          if (this.pict.views['Mapper-JSONEditor']) this.pict.views['Mapper-JSONEditor'].render();
-        }
-      }
-      module.exports = MapperAPIProvider;
-      module.exports.default_configuration = {
-        ProviderIdentifier: 'MapperAPI',
-        AutoInitialize: true,
-        AutoRender: false
-      };
-    }, {
-      "pict-view": 6
-    }],
-    10: [function (require, module, exports) {
-      /**
-       * DataMapper BeaconBrowser View
-       *
-       * Two side-by-side selector rows (source + target): beacon → connection →
-       * entity dropdowns. Dispatches happen via the MapperAPI provider; this view
-       * just reads state and emits click/change events.
-       */
-      const libPictView = require('pict-view');
-      const _ViewConfiguration = {
-        ViewIdentifier: 'Mapper-BeaconBrowser',
-        DefaultRenderable: 'Mapper-BeaconBrowser-Content',
-        DefaultDestinationAddress: '#DataMapper-BeaconBrowser-Slot',
-        AutoRender: false,
-        CSS: /*css*/`
-			.beacon-browser { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
-			.bb-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-			.bb-row:last-child { margin-bottom: 0; }
-			.bb-label { width: 64px; color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-			.bb-divider { height: 1px; background: #30363d; margin: 10px 0; }
-		`,
-        Templates: [{
-          Hash: 'Mapper-BeaconBrowser-Template',
-          Template: /*html*/`
-<div class="beacon-browser">
-	<div class="mapper-section-title">Beacon &amp; Entity Selection</div>
-	<div class="bb-row">
-		<span class="bb-label">Source</span>
-		<select id="DataMapper-Source-Beacon">
-			<option value="">— beacon —</option>
-			{~TS:Mapper-BeaconBrowser-BeaconOpt:AppData.Mapper.SourceBeacons~}
-		</select>
-		<select id="DataMapper-Source-Connection">
-			<option value="">— connection —</option>
-			{~TS:Mapper-BeaconBrowser-ConnOpt:AppData.Mapper.SourceConnectionsForTemplate~}
-		</select>
-		<select id="DataMapper-Source-Entity">
-			<option value="">— entity —</option>
-			{~TS:Mapper-BeaconBrowser-EntityOpt:AppData.Mapper.SourceEntitiesForTemplate~}
-		</select>
-	</div>
-	<div class="bb-divider"></div>
-	<div class="bb-row">
-		<span class="bb-label">Target</span>
-		<select id="DataMapper-Target-Beacon">
-			<option value="">— beacon —</option>
-			{~TS:Mapper-BeaconBrowser-BeaconOpt:AppData.Mapper.TargetBeacons~}
-		</select>
-		<select id="DataMapper-Target-Connection">
-			<option value="">— connection —</option>
-			{~TS:Mapper-BeaconBrowser-ConnOpt:AppData.Mapper.TargetConnectionsForTemplate~}
-		</select>
-		<select id="DataMapper-Target-Entity">
-			<option value="">— entity —</option>
-			{~TS:Mapper-BeaconBrowser-EntityOpt:AppData.Mapper.TargetEntitiesForTemplate~}
-		</select>
-	</div>
-</div>`
-        }, {
-          Hash: 'Mapper-BeaconBrowser-BeaconOpt',
-          Template: /*html*/`<option value="{~D:Record.Name~}" {~D:Record.SelectedAttr~}>{~D:Record.Name~}</option>`
-        }, {
-          Hash: 'Mapper-BeaconBrowser-ConnOpt',
-          Template: /*html*/`<option value="{~D:Record.IDBeaconConnection~}" {~D:Record.SelectedAttr~}>#{~D:Record.IDBeaconConnection~} {~D:Record.Name~} ({~D:Record.Type~})</option>`
-        }, {
-          Hash: 'Mapper-BeaconBrowser-EntityOpt',
-          Template: /*html*/`<option value="{~D:Record.TableName~}" {~D:Record.SelectedAttr~}>{~D:Record.TableName~} ({~D:Record.ColumnCount~} cols)</option>`
-        }],
-        Renderables: [{
-          RenderableHash: 'Mapper-BeaconBrowser-Content',
-          TemplateHash: 'Mapper-BeaconBrowser-Template',
-          ContentDestinationAddress: '#DataMapper-BeaconBrowser-Slot',
-          RenderMethod: 'replace'
-        }]
-      };
-      class PictViewMapperBeaconBrowser extends libPictView {
-        constructor(pFable, pOptions, pServiceHash) {
-          super(pFable, pOptions, pServiceHash);
-        }
-        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
-          let tmpProvider = this.pict.providers.MapperAPI;
-          let fBindChange = (pSelector, fHandler) => {
-            let tmpEl = this.pict.ContentAssignment.getElement(pSelector);
-            if (tmpEl && tmpEl.length) tmpEl[0].addEventListener('change', fHandler);
-          };
-          fBindChange('#DataMapper-Source-Beacon', pEvent => {
-            tmpProvider.loadSourceConnections(pEvent.target.value);
-          });
-          fBindChange('#DataMapper-Source-Connection', pEvent => {
-            let tmpID = parseInt(pEvent.target.value, 10);
-            if (tmpID) {
-              tmpProvider.introspectSource(tmpID);
-            }
-          });
-          fBindChange('#DataMapper-Source-Entity', pEvent => {
-            tmpProvider.setSourceEntity(pEvent.target.value);
-          });
-          fBindChange('#DataMapper-Target-Beacon', pEvent => {
-            tmpProvider.loadTargetConnections(pEvent.target.value);
-          });
-          fBindChange('#DataMapper-Target-Connection', pEvent => {
-            let tmpID = parseInt(pEvent.target.value, 10);
-            if (tmpID) {
-              tmpProvider.introspectTarget(tmpID);
-            }
-          });
-          fBindChange('#DataMapper-Target-Entity', pEvent => {
-            tmpProvider.setTargetEntity(pEvent.target.value);
-          });
-          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
-        }
-      }
-      module.exports = PictViewMapperBeaconBrowser;
-      module.exports.default_configuration = _ViewConfiguration;
-    }, {
-      "pict-view": 6
-    }],
-    11: [function (require, module, exports) {
-      /**
-       * DataMapper FieldMapper View
-       *
-       * Three-column layout: source fields | mappings | target fields. Click a
-       * source field, then click a target field, to create a mapping. Drag+drop
-       * from source to target works too.
-       */
-      const libPictView = require('pict-view');
-      const _ViewConfiguration = {
-        ViewIdentifier: 'Mapper-FieldMapper',
-        DefaultRenderable: 'Mapper-FieldMapper-Content',
-        DefaultDestinationAddress: '#DataMapper-FieldMapper-Slot',
-        AutoRender: false,
-        CSS: /*css*/`
-			.field-mapper { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 10px; min-height: 360px; }
-			.fm-panel { background: #161b22; border: 1px solid #30363d; border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; }
-			.fm-panel-header { padding: 10px 12px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
-			.fm-panel-body { flex: 1; overflow: auto; padding: 8px; }
-			.fm-field { background: #0d1117; border: 1px solid #30363d; padding: 6px 10px; border-radius: 4px; margin-bottom: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 13px; user-select: none; }
-			.fm-field:hover { border-color: #484f58; }
-			.fm-field.selected { border-color: #ff9800; background: #2d1f00; }
-			.fm-field.mapped { border-color: #3fb950; }
-			.fm-field .fm-type { color: #8b949e; font-size: 11px; }
-			.fm-empty { color: #8b949e; padding: 16px; text-align: center; font-style: italic; font-size: 13px; }
-			.fm-mapping-drop { border: 1px dashed #30363d; border-radius: 4px; padding: 10px; text-align: center; color: #8b949e; margin: 0 8px 8px 8px; font-size: 12px; }
-			.fm-mapping-drop.active { border-color: #ff9800; color: #ff9800; background: #1a140a; }
-			.fm-mapping-row { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 6px; align-items: center; padding: 6px 10px; margin-bottom: 4px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; font-size: 13px; }
-			.fm-arrow { color: #ff9800; font-weight: bold; }
-			.fm-remove { background: transparent; border: 0; color: #da3633; cursor: pointer; font-size: 16px; padding: 0 4px; }
-			.fm-footer { padding: 8px 12px; border-top: 1px solid #30363d; display: flex; gap: 6px; align-items: center; }
-		`,
-        Templates: [{
-          Hash: 'Mapper-FieldMapper-Template',
-          Template: /*html*/`
-<div class="field-mapper">
-	<div class="fm-panel">
-		<div class="fm-panel-header">Source Fields <span>{~D:AppData.Mapper.SourceFieldCount~}</span></div>
-		<div class="fm-panel-body" id="DataMapper-SourceFields-List">
-			{~TS:Mapper-FieldMapper-SourceField:AppData.Mapper.SourceFieldsForTemplate~}
-			{~D:AppData.Mapper.SourceEmptyHTML~}
-		</div>
-	</div>
-	<div class="fm-panel">
-		<div class="fm-panel-header">Field Mappings <span>{~D:AppData.Mapper.MappingCount~}</span></div>
-		<div class="fm-mapping-drop {~D:AppData.Mapper.DropZoneClass~}">{~D:AppData.Mapper.DropZoneText~}</div>
-		<div class="fm-panel-body" id="DataMapper-Mapping-List">
-			{~TS:Mapper-FieldMapper-MappingRow:AppData.Mapper.MappingsForTemplate~}
-		</div>
-		<div class="fm-footer">
-			<button class="btn primary" id="DataMapper-Save-Mapping">Save Mapping</button>
-			<button class="btn" id="DataMapper-Clear-Mappings">Clear All</button>
-		</div>
-	</div>
-	<div class="fm-panel">
-		<div class="fm-panel-header">Target Fields <span>{~D:AppData.Mapper.TargetFieldCount~}</span></div>
-		<div class="fm-panel-body" id="DataMapper-TargetFields-List">
-			{~TS:Mapper-FieldMapper-TargetField:AppData.Mapper.TargetFieldsForTemplate~}
-			{~D:AppData.Mapper.TargetEmptyHTML~}
-		</div>
-	</div>
-</div>`
-        }, {
-          Hash: 'Mapper-FieldMapper-SourceField',
-          Template: /*html*/`<div class="fm-field {~D:Record.SelectedClass~}" data-source-field="{~D:Record.Name~}" draggable="true"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
-        }, {
-          Hash: 'Mapper-FieldMapper-TargetField',
-          Template: /*html*/`<div class="fm-field {~D:Record.MappedClass~}" data-target-field="{~D:Record.Name~}"><span>{~D:Record.Name~}</span><span class="fm-type">{~D:Record.Type~}</span></div>`
-        }, {
-          Hash: 'Mapper-FieldMapper-MappingRow',
-          Template: /*html*/`<div class="fm-mapping-row"><span>{~D:Record.Source~}</span><span class="fm-arrow">&rarr;</span><span>{~D:Record.Target~}</span><button class="fm-remove" data-remove-mapping="{~D:Record.Index~}">&times;</button></div>`
-        }],
-        Renderables: [{
-          RenderableHash: 'Mapper-FieldMapper-Content',
-          TemplateHash: 'Mapper-FieldMapper-Template',
-          ContentDestinationAddress: '#DataMapper-FieldMapper-Slot',
-          RenderMethod: 'replace'
-        }]
-      };
-      class PictViewMapperFieldMapper extends libPictView {
-        constructor(pFable, pOptions, pServiceHash) {
-          super(pFable, pOptions, pServiceHash);
-        }
-        onBeforeRender(pRenderable) {
-          let tmpState = this.pict.AppData.Mapper;
-          let tmpSelected = tmpState.SelectedSourceField || '';
-          let tmpSources = tmpState.SourceFields || [];
-          tmpState.SourceFieldCount = `${tmpSources.length} field${tmpSources.length === 1 ? '' : 's'}`;
-          tmpState.SourceFieldsForTemplate = tmpSources.map(pF => ({
-            Name: pF.Name,
-            Type: pF.Type || '',
-            SelectedClass: pF.Name === tmpSelected ? 'selected' : ''
-          }));
-          tmpState.SourceEmptyHTML = tmpSources.length === 0 ? '<div class="fm-empty">Pick a source beacon, connection, and entity above.</div>' : '';
-          let tmpMappings = tmpState.Mappings || [];
-          let tmpMappedTargets = {};
-          for (let i = 0; i < tmpMappings.length; i++) {
-            tmpMappedTargets[tmpMappings[i].Target] = true;
-          }
-          let tmpTargets = tmpState.TargetFields || [];
-          tmpState.TargetFieldCount = `${tmpTargets.length} field${tmpTargets.length === 1 ? '' : 's'}`;
-          tmpState.TargetFieldsForTemplate = tmpTargets.map(pF => ({
-            Name: pF.Name,
-            Type: pF.Type || '',
-            MappedClass: tmpMappedTargets[pF.Name] ? 'mapped' : ''
-          }));
-          tmpState.TargetEmptyHTML = tmpTargets.length === 0 ? '<div class="fm-empty">Pick a target beacon, connection, and entity above.</div>' : '';
-          tmpState.MappingCount = `${tmpMappings.length} mapping${tmpMappings.length === 1 ? '' : 's'}`;
-          tmpState.MappingsForTemplate = tmpMappings.map((pM, pIdx) => ({
-            Source: pM.Source,
-            Target: pM.Target,
-            Index: pIdx
-          }));
-          if (tmpSelected) {
-            tmpState.DropZoneClass = 'active';
-            tmpState.DropZoneText = `Source "${tmpSelected}" selected — click a target field to map it`;
-          } else {
-            tmpState.DropZoneClass = '';
-            tmpState.DropZoneText = 'Click a source field, then click a target field';
-          }
-          return super.onBeforeRender(pRenderable);
-        }
-        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
-          let tmpProvider = this.pict.providers.MapperAPI;
-          let tmpSelf = this;
-          let tmpSourceFields = this.pict.ContentAssignment.getElement('[data-source-field]');
-          if (tmpSourceFields && tmpSourceFields.length) {
-            for (let i = 0; i < tmpSourceFields.length; i++) {
-              let tmpEl = tmpSourceFields[i];
-              tmpEl.addEventListener('click', pEvent => {
-                tmpProvider.selectSourceField(pEvent.currentTarget.getAttribute('data-source-field'));
-              });
-              tmpEl.addEventListener('dragstart', pEvent => {
-                let tmpName = pEvent.currentTarget.getAttribute('data-source-field');
-                pEvent.dataTransfer.setData('text/plain', tmpName);
-                tmpProvider.pict.AppData.Mapper.SelectedSourceField = tmpName;
-              });
-            }
-          }
-          let tmpTargetFields = this.pict.ContentAssignment.getElement('[data-target-field]');
-          if (tmpTargetFields && tmpTargetFields.length) {
-            for (let i = 0; i < tmpTargetFields.length; i++) {
-              let tmpEl = tmpTargetFields[i];
-              tmpEl.addEventListener('click', pEvent => {
-                let tmpTarget = pEvent.currentTarget.getAttribute('data-target-field');
-                let tmpSource = tmpSelf.pict.AppData.Mapper.SelectedSourceField;
-                if (tmpSource && tmpTarget) {
-                  tmpProvider.addMapping(tmpSource, tmpTarget);
-                }
-              });
-              tmpEl.addEventListener('dragover', pEvent => pEvent.preventDefault());
-              tmpEl.addEventListener('drop', pEvent => {
-                pEvent.preventDefault();
-                let tmpSource = pEvent.dataTransfer.getData('text/plain');
-                let tmpTarget = pEvent.currentTarget.getAttribute('data-target-field');
-                if (tmpSource && tmpTarget) {
-                  tmpProvider.addMapping(tmpSource, tmpTarget);
-                }
-              });
-            }
-          }
-          let tmpRemoveBtns = this.pict.ContentAssignment.getElement('[data-remove-mapping]');
-          if (tmpRemoveBtns && tmpRemoveBtns.length) {
-            for (let i = 0; i < tmpRemoveBtns.length; i++) {
-              tmpRemoveBtns[i].addEventListener('click', pEvent => {
-                let tmpIndex = parseInt(pEvent.currentTarget.getAttribute('data-remove-mapping'), 10);
-                tmpProvider.removeMapping(tmpIndex);
-              });
-            }
-          }
-          let tmpSaveBtn = this.pict.ContentAssignment.getElement('#DataMapper-Save-Mapping');
-          if (tmpSaveBtn && tmpSaveBtn.length) {
-            tmpSaveBtn[0].addEventListener('click', () => tmpProvider.saveMapping());
-          }
-          let tmpClearBtn = this.pict.ContentAssignment.getElement('#DataMapper-Clear-Mappings');
-          if (tmpClearBtn && tmpClearBtn.length) {
-            tmpClearBtn[0].addEventListener('click', () => tmpProvider.clearMappings());
-          }
-          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
-        }
-      }
-      module.exports = PictViewMapperFieldMapper;
-      module.exports.default_configuration = _ViewConfiguration;
-    }, {
-      "pict-view": 6
-    }],
-    12: [function (require, module, exports) {
-      /**
-       * DataMapper JSONEditor View
-       *
-       * Dual-mode config editor: shows the generated MappingConfiguration JSON
-       * and supports import via paste, file picker, or drag-drop onto the textarea.
-       */
-      const libPictView = require('pict-view');
-      const _ViewConfiguration = {
-        ViewIdentifier: 'Mapper-JSONEditor',
-        DefaultRenderable: 'Mapper-JSONEditor-Content',
-        DefaultDestinationAddress: '#DataMapper-JSONEditor-Slot',
-        AutoRender: false,
-        CSS: /*css*/`
-			.json-editor { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; }
-			.json-editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-			.json-editor-header h2 { margin: 0; font-size: 14px; font-weight: 600; color: #e6edf3; }
-			.json-editor-actions { display: flex; gap: 6px; }
-			.json-editor textarea { width: 100%; min-height: 360px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; font-family: 'Menlo', 'Monaco', 'Consolas', monospace; font-size: 12px; padding: 10px; resize: vertical; }
-			.json-editor textarea.drop-active { border-color: #ff9800; }
-		`,
-        Templates: [{
-          Hash: 'Mapper-JSONEditor-Template',
-          Template: /*html*/`
-<div class="json-editor">
-	<div class="json-editor-header">
-		<h2>MappingConfiguration JSON</h2>
-		<div class="json-editor-actions">
-			<button class="btn" id="DataMapper-JSON-Regenerate">Regenerate</button>
-			<button class="btn" id="DataMapper-JSON-Apply">Apply to Editor</button>
-			<button class="btn" id="DataMapper-JSON-Copy">Copy</button>
-			<button class="btn" id="DataMapper-JSON-Upload">Upload…</button>
-			<input type="file" id="DataMapper-JSON-File" accept=".json" style="display:none">
-		</div>
-	</div>
-	<textarea id="DataMapper-JSON-Text" placeholder='{ "Entity":"MyEntity", "Mappings":{...} }'>{~D:AppData.Mapper.JSONText~}</textarea>
-</div>`
-        }],
-        Renderables: [{
-          RenderableHash: 'Mapper-JSONEditor-Content',
-          TemplateHash: 'Mapper-JSONEditor-Template',
-          ContentDestinationAddress: '#DataMapper-JSONEditor-Slot',
-          RenderMethod: 'replace'
-        }]
-      };
-      class PictViewMapperJSONEditor extends libPictView {
-        constructor(pFable, pOptions, pServiceHash) {
-          super(pFable, pOptions, pServiceHash);
-        }
-        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
-          let tmpProvider = this.pict.providers.MapperAPI;
-          let tmpSelf = this;
-          let tmpTextareaEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Text');
-          let tmpTextarea = tmpTextareaEl && tmpTextareaEl.length ? tmpTextareaEl[0] : null;
-          let tmpRegenBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Regenerate');
-          if (tmpRegenBtn && tmpRegenBtn.length) {
-            tmpRegenBtn[0].addEventListener('click', () => {
-              tmpProvider._regenerateJSON();
-              if (tmpTextarea) tmpTextarea.value = tmpSelf.pict.AppData.Mapper.JSONText;
-            });
-          }
-          let tmpApplyBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Apply');
-          if (tmpApplyBtn && tmpApplyBtn.length) {
-            tmpApplyBtn[0].addEventListener('click', () => {
-              if (tmpTextarea) tmpProvider.applyJSONText(tmpTextarea.value);
-            });
-          }
-          let tmpCopyBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Copy');
-          if (tmpCopyBtn && tmpCopyBtn.length) {
-            tmpCopyBtn[0].addEventListener('click', () => {
-              if (!tmpTextarea) return;
-              try {
-                navigator.clipboard.writeText(tmpTextarea.value);
-                tmpSelf.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
-              } catch (e) {
-                tmpTextarea.select();
-                document.execCommand('copy');
-                tmpSelf.pict.AppData.Mapper.StatusMessage = 'JSON copied.';
-              }
-              if (tmpSelf.pict.views['Mapper-Layout']) tmpSelf.pict.views['Mapper-Layout'].render();
-            });
-          }
-          let tmpUploadBtn = this.pict.ContentAssignment.getElement('#DataMapper-JSON-Upload');
-          let tmpFileInputEl = this.pict.ContentAssignment.getElement('#DataMapper-JSON-File');
-          let tmpFileInput = tmpFileInputEl && tmpFileInputEl.length ? tmpFileInputEl[0] : null;
-          if (tmpUploadBtn && tmpUploadBtn.length && tmpFileInput) {
-            tmpUploadBtn[0].addEventListener('click', () => tmpFileInput.click());
-            tmpFileInput.addEventListener('change', pEvent => {
-              let tmpFile = pEvent.target.files[0];
-              if (!tmpFile) return;
-              let tmpReader = new FileReader();
-              tmpReader.onload = pLoadEvent => {
-                if (tmpTextarea) tmpTextarea.value = pLoadEvent.target.result;
-                tmpProvider.applyJSONText(pLoadEvent.target.result);
-              };
-              tmpReader.readAsText(tmpFile);
-              pEvent.target.value = '';
-            });
-          }
-          if (tmpTextarea) {
-            tmpTextarea.addEventListener('dragover', pEvent => {
-              pEvent.preventDefault();
-              tmpTextarea.classList.add('drop-active');
-            });
-            tmpTextarea.addEventListener('dragleave', () => tmpTextarea.classList.remove('drop-active'));
-            tmpTextarea.addEventListener('drop', pEvent => {
-              pEvent.preventDefault();
-              tmpTextarea.classList.remove('drop-active');
-              let tmpFiles = pEvent.dataTransfer.files;
-              if (tmpFiles && tmpFiles.length > 0) {
-                let tmpReader = new FileReader();
-                tmpReader.onload = pLoadEvent => {
-                  tmpTextarea.value = pLoadEvent.target.result;
-                  tmpProvider.applyJSONText(pLoadEvent.target.result);
-                };
-                tmpReader.readAsText(tmpFiles[0]);
-              }
-            });
-          }
-          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
-        }
-      }
-      module.exports = PictViewMapperJSONEditor;
-      module.exports.default_configuration = _ViewConfiguration;
-    }, {
-      "pict-view": 6
-    }],
-    13: [function (require, module, exports) {
-      /**
-       * DataMapper Layout View
-       *
-       * Shell: header with Ultravisor controls + status, tab bar that switches
-       * between mapper / saved-mappings / JSON panels, and mount-point divs
-       * for the sub-views.
-       */
-      const libPictView = require('pict-view');
-      const _PanelDefs = [{
-        Key: 'mapper',
-        Label: 'Visual Mapper'
-      }, {
-        Key: 'mappings',
-        Label: 'Saved Mappings'
-      }, {
-        Key: 'json',
-        Label: 'JSON Config'
-      }];
-      const _ViewConfiguration = {
-        ViewIdentifier: 'Mapper-Layout',
-        DefaultRenderable: 'Mapper-Layout-Shell',
-        DefaultDestinationAddress: '#DataMapper-App',
-        AutoRender: false,
-        CSS: /*css*/`
-			body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: #0d1117; color: #e6edf3; font-size: 14px; }
-			.mapper-app { display: flex; flex-direction: column; height: 100vh; }
-			.mapper-header { background: #161b22; border-bottom: 1px solid #30363d; padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-			.mapper-header h1 { margin: 0; font-size: 16px; font-weight: 600; color: #ff9800; }
-			.mapper-uv-controls { display: flex; gap: 6px; align-items: center; flex: 1; }
-			.mapper-uv-controls input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 4px; font-size: 13px; min-width: 220px; }
-			.mapper-uv-controls button { background: #238636; color: #fff; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-			.mapper-uv-controls button.secondary { background: #30363d; }
-			.mapper-uv-controls button:hover { filter: brightness(1.15); }
-			.mapper-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-			.badge-neutral { background: #30363d; color: #8b949e; }
-			.badge-success { background: #238636; color: #fff; }
-			.badge-error { background: #da3633; color: #fff; }
-			.badge-info { background: #1f6feb; color: #fff; }
-			.mapper-status { color: #8b949e; font-size: 12px; }
-			.mapper-tabs { background: #161b22; border-bottom: 1px solid #30363d; padding: 0 20px; display: flex; gap: 2px; }
-			.mapper-tab { background: transparent; border: 0; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; }
-			.mapper-tab.active { color: #ff9800; border-bottom-color: #ff9800; }
-			.mapper-tab:hover { color: #e6edf3; }
-			.mapper-main { flex: 1; overflow: auto; padding: 16px 20px; }
-			.mapper-panel { display: none; }
-			.mapper-panel.active { display: block; }
-			.mapper-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #8b949e; margin: 0 0 8px 0; }
-			select, input[type="text"], textarea { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
-			select { min-width: 160px; }
-			button.btn { background: #30363d; color: #e6edf3; border: 0; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-			button.btn.primary { background: #ff9800; color: #0d1117; }
-			button.btn.danger { background: #da3633; color: #fff; }
-			button.btn:hover { filter: brightness(1.15); }
-			button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-		`,
-        Templates: [{
-          Hash: 'Mapper-Layout-Shell',
-          Template: /*html*/`
-<div class="mapper-app">
-	<header class="mapper-header">
-		<h1>Retold Data Mapper</h1>
-		<div class="mapper-uv-controls">
-			<label style="color:#8b949e; font-size:12px;">Ultravisor</label>
-			<input type="text" id="DataMapper-UV-URL" placeholder="http://localhost:8422" value="{~D:AppData.Mapper.UltravisorURL~}">
-			<button id="DataMapper-UV-Connect">Connect</button>
-			<button id="DataMapper-UV-Disconnect" class="secondary">Disconnect</button>
-			<span class="mapper-badge {~D:AppData.Mapper.UltravisorBadgeClass~}">{~D:AppData.Mapper.UltravisorStatusLabel~}</span>
-		</div>
-		<div class="mapper-status">{~D:AppData.Mapper.StatusMessage~}</div>
-	</header>
-	<nav class="mapper-tabs">{~TS:Mapper-Layout-Tab:AppData.Mapper.Tabs~}</nav>
-	<main class="mapper-main">
-		<div id="DataMapper-Panel-mapper" class="mapper-panel">
-			<div id="DataMapper-BeaconBrowser-Slot"></div>
-			<div id="DataMapper-FieldMapper-Slot"></div>
-		</div>
-		<div id="DataMapper-Panel-mappings" class="mapper-panel">
-			<div id="DataMapper-MappingList-Slot"></div>
-		</div>
-		<div id="DataMapper-Panel-json" class="mapper-panel">
-			<div id="DataMapper-JSONEditor-Slot"></div>
-		</div>
-	</main>
-</div>`
-        }, {
-          Hash: 'Mapper-Layout-Tab',
-          Template: /*html*/`<button class="mapper-tab {~D:Record.ActiveClass~}" data-mapper-panel="{~D:Record.Key~}">{~D:Record.Label~}</button>`
-        }],
-        Renderables: [{
-          RenderableHash: 'Mapper-Layout-Shell',
-          TemplateHash: 'Mapper-Layout-Shell',
-          ContentDestinationAddress: '#DataMapper-App',
-          RenderMethod: 'replace'
-        }]
-      };
-      class PictViewMapperLayout extends libPictView {
-        constructor(pFable, pOptions, pServiceHash) {
-          super(pFable, pOptions, pServiceHash);
-        }
-        onBeforeRender(pRenderable) {
-          let tmpActive = this.pict.AppData.Mapper && this.pict.AppData.Mapper.ActivePanel || 'mapper';
-          this.pict.AppData.Mapper.Tabs = _PanelDefs.map(pP => ({
-            Key: pP.Key,
-            Label: pP.Label,
-            ActiveClass: pP.Key === tmpActive ? 'active' : ''
-          }));
-          return super.onBeforeRender(pRenderable);
-        }
-        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
-          let tmpSelf = this;
-          let tmpConnectBtn = this.pict.ContentAssignment.getElement('#DataMapper-UV-Connect');
-          if (tmpConnectBtn && tmpConnectBtn.length) {
-            tmpConnectBtn[0].addEventListener('click', () => {
-              let tmpURLInput = tmpSelf.pict.ContentAssignment.getElement('#DataMapper-UV-URL');
-              let tmpURL = tmpURLInput && tmpURLInput.length ? tmpURLInput[0].value : '';
-              if (!tmpURL) {
-                return;
-              }
-              tmpSelf.pict.providers.MapperAPI.connectUltravisor(tmpURL);
-            });
-          }
-          let tmpDisconnectBtn = this.pict.ContentAssignment.getElement('#DataMapper-UV-Disconnect');
-          if (tmpDisconnectBtn && tmpDisconnectBtn.length) {
-            tmpDisconnectBtn[0].addEventListener('click', () => {
-              tmpSelf.pict.providers.MapperAPI.disconnectUltravisor();
-            });
-          }
-          let tmpTabButtons = this.pict.ContentAssignment.getElement('[data-mapper-panel]');
-          if (tmpTabButtons && tmpTabButtons.length) {
-            for (let i = 0; i < tmpTabButtons.length; i++) {
-              tmpTabButtons[i].addEventListener('click', pEvent => {
-                let tmpKey = pEvent.currentTarget.getAttribute('data-mapper-panel');
-                if (tmpKey) tmpSelf.setActivePanel(tmpKey);
-              });
-            }
-          }
-
-          // Render sub-views into their mount slots.
-          if (this.pict.views['Mapper-BeaconBrowser']) this.pict.views['Mapper-BeaconBrowser'].render();
-          if (this.pict.views['Mapper-FieldMapper']) this.pict.views['Mapper-FieldMapper'].render();
-          if (this.pict.views['Mapper-MappingList']) this.pict.views['Mapper-MappingList'].render();
-          if (this.pict.views['Mapper-JSONEditor']) this.pict.views['Mapper-JSONEditor'].render();
-          this._applyActivePanelVisibility();
-          if (this.pict.CSSMap && typeof this.pict.CSSMap.injectCSS === 'function') {
-            this.pict.CSSMap.injectCSS();
-          }
-          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
-        }
-        setActivePanel(pKey) {
-          this.pict.AppData.Mapper.ActivePanel = pKey;
-          this._applyActivePanelVisibility();
-          let tmpTabButtons = this.pict.ContentAssignment.getElement('[data-mapper-panel]');
-          if (tmpTabButtons && tmpTabButtons.length) {
-            for (let i = 0; i < tmpTabButtons.length; i++) {
-              let tmpName = tmpTabButtons[i].getAttribute('data-mapper-panel');
-              if (tmpName === pKey) tmpTabButtons[i].classList.add('active');else tmpTabButtons[i].classList.remove('active');
-            }
-          }
-        }
-        _applyActivePanelVisibility() {
-          let tmpActive = this.pict.AppData.Mapper.ActivePanel || 'mapper';
-          for (let i = 0; i < _PanelDefs.length; i++) {
-            let tmpKey = _PanelDefs[i].Key;
-            let tmpPanelEl = this.pict.ContentAssignment.getElement(`#DataMapper-Panel-${tmpKey}`);
-            if (tmpPanelEl && tmpPanelEl.length) {
-              tmpPanelEl[0].classList.toggle('active', tmpKey === tmpActive);
-            }
-          }
-        }
-      }
-      module.exports = PictViewMapperLayout;
-      module.exports.default_configuration = _ViewConfiguration;
-    }, {
-      "pict-view": 6
-    }],
-    14: [function (require, module, exports) {
-      /**
-       * DataMapper MappingList View
-       *
-       * Lists MappingConfig rows persisted in the mapper's internal SQLite. Click
-       * to load into the editor; × to delete.
-       */
-      const libPictView = require('pict-view');
-      const _ViewConfiguration = {
-        ViewIdentifier: 'Mapper-MappingList',
-        DefaultRenderable: 'Mapper-MappingList-Content',
-        DefaultDestinationAddress: '#DataMapper-MappingList-Slot',
-        AutoRender: false,
-        CSS: /*css*/`
-			.mapping-list { background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
-			.ml-header { padding: 10px 16px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
-			.ml-header h2 { margin: 0; font-size: 14px; color: #e6edf3; font-weight: 600; }
-			.ml-empty { padding: 16px; text-align: center; color: #8b949e; font-style: italic; }
-			.ml-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #21262d; align-items: center; }
-			.ml-row:last-child { border-bottom: 0; }
-			.ml-row:hover { background: #1c2333; }
-			.ml-name { font-size: 13px; color: #e6edf3; font-weight: 500; }
-			.ml-sub { font-size: 12px; color: #8b949e; }
-		`,
-        Templates: [{
-          Hash: 'Mapper-MappingList-Template',
-          Template: /*html*/`
-<div class="mapping-list">
-	<div class="ml-header">
-		<h2>Saved Mappings</h2>
-		<button class="btn" id="DataMapper-Refresh-Mappings">Refresh</button>
-	</div>
-	{~TS:Mapper-MappingList-Row:AppData.Mapper.SavedMappingsForTemplate~}
-	{~D:AppData.Mapper.SavedMappingsEmptyHTML~}
-</div>`
-        }, {
-          Hash: 'Mapper-MappingList-Row',
-          Template: /*html*/`
-<div class="ml-row">
-	<div>
-		<div class="ml-name">{~D:Record.Name~}</div>
-		<div class="ml-sub">{~D:Record.Subline~}</div>
-	</div>
-	<button class="btn" data-load-mapping="{~D:Record.IDMappingConfig~}">Load</button>
-	<button class="btn danger" data-delete-mapping="{~D:Record.IDMappingConfig~}">&times;</button>
-</div>`
-        }],
-        Renderables: [{
-          RenderableHash: 'Mapper-MappingList-Content',
-          TemplateHash: 'Mapper-MappingList-Template',
-          ContentDestinationAddress: '#DataMapper-MappingList-Slot',
-          RenderMethod: 'replace'
-        }]
-      };
-      class PictViewMapperMappingList extends libPictView {
-        constructor(pFable, pOptions, pServiceHash) {
-          super(pFable, pOptions, pServiceHash);
-        }
-        onBeforeRender(pRenderable) {
-          let tmpState = this.pict.AppData.Mapper;
-          let tmpSaved = tmpState.SavedMappings || [];
-          tmpState.SavedMappingsForTemplate = tmpSaved.map(pM => {
-            let tmpParts = [];
-            if (pM.SourceBeaconName) tmpParts.push(`${pM.SourceBeaconName}${pM.SourceEntity ? '/' + pM.SourceEntity : ''}`);
-            if (pM.TargetBeaconName) tmpParts.push(`${pM.TargetBeaconName}${pM.TargetEntity ? '/' + pM.TargetEntity : ''}`);
-            return {
-              IDMappingConfig: pM.IDMappingConfig,
-              Name: pM.Name || '(unnamed)',
-              Subline: tmpParts.join(' → ')
-            };
-          });
-          tmpState.SavedMappingsEmptyHTML = tmpSaved.length === 0 ? '<div class="ml-empty">No saved mappings yet. Save one from the Visual Mapper tab.</div>' : '';
-          return super.onBeforeRender(pRenderable);
-        }
-        onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent) {
-          let tmpProvider = this.pict.providers.MapperAPI;
-          let tmpRefreshBtn = this.pict.ContentAssignment.getElement('#DataMapper-Refresh-Mappings');
-          if (tmpRefreshBtn && tmpRefreshBtn.length) {
-            tmpRefreshBtn[0].addEventListener('click', () => tmpProvider.loadSavedMappings());
-          }
-          let tmpLoadBtns = this.pict.ContentAssignment.getElement('[data-load-mapping]');
-          if (tmpLoadBtns && tmpLoadBtns.length) {
-            for (let i = 0; i < tmpLoadBtns.length; i++) {
-              tmpLoadBtns[i].addEventListener('click', pEvent => {
-                let tmpID = parseInt(pEvent.currentTarget.getAttribute('data-load-mapping'), 10);
-                if (tmpID) tmpProvider.loadSavedMapping(tmpID);
-              });
-            }
-          }
-          let tmpDeleteBtns = this.pict.ContentAssignment.getElement('[data-delete-mapping]');
-          if (tmpDeleteBtns && tmpDeleteBtns.length) {
-            for (let i = 0; i < tmpDeleteBtns.length; i++) {
-              tmpDeleteBtns[i].addEventListener('click', pEvent => {
-                let tmpID = parseInt(pEvent.currentTarget.getAttribute('data-delete-mapping'), 10);
-                if (tmpID) tmpProvider.deleteSavedMapping(tmpID);
-              });
-            }
-          }
-          return super.onAfterRender(pRenderable, pRenderDestinationAddress, pRecord, pContent);
-        }
-      }
-      module.exports = PictViewMapperMappingList;
-      module.exports.default_configuration = _ViewConfiguration;
-    }, {
-      "pict-view": 6
+      "../package.json": 31,
+      "fable-serviceproviderbase": 20
     }]
-  }, {}, [8])(8);
+  }, {}, [4])(4);
 });
 //# sourceMappingURL=retold-data-mapper.js.map

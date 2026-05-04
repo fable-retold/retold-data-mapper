@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS MappingConfig (
 	CreateDate TEXT, CreatingIDUser INTEGER DEFAULT 0,
 	UpdateDate TEXT, UpdatingIDUser INTEGER DEFAULT 0,
 	Deleted INTEGER DEFAULT 0, DeleteDate TEXT, DeletingIDUser INTEGER DEFAULT 0,
+	Scope TEXT DEFAULT '',
 	Name TEXT,
 	Description TEXT,
 	SourceBeaconName TEXT,

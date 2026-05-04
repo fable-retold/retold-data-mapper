@@ -219,6 +219,84 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 
 		// ── Introspection ───────────────────────────────────────
 
+		// GET /mapper/beacon/:name/columns?ConnectionHash=X&Entity=Y
+		// Convenience for the editor: resolve ConnectionHash → IDBeaconConnection
+		// (via ListConnections), introspect, and return just the columns for
+		// the requested entity. Saves the editor from doing two calls + a
+		// hash-to-id lookup itself.
+		pOratorServiceServer.doGet(`${tmpRoutePrefix}/beacon/:name/columns`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpName = pRequest.params.name;
+				let tmpHash = (pRequest.query && pRequest.query.ConnectionHash) || '';
+				let tmpEntity = (pRequest.query && pRequest.query.Entity) || '';
+				if (!tmpHash || !tmpEntity)
+				{
+					return this._sendError(pResponse, 400,
+						'GET /mapper/beacon/:name/columns requires ?ConnectionHash and ?Entity', fNext);
+				}
+
+				// Step 1 — list connections, find the one whose slug matches.
+				this._dispatch(
+					{
+						Capability: 'DataBeaconAccess',
+						Action: 'ListConnections',
+						Settings: {},
+						AffinityKey: tmpName,
+						TimeoutMs: 15000
+					},
+					(pListErr, pListResult) =>
+					{
+						if (pListErr) return this._sendError(pResponse, 502, 'list connections: ' + pListErr.message, fNext);
+						let tmpConns = ((pListResult && pListResult.Outputs) || pListResult || {}).Connections || [];
+						// ConnectionHash is the URL slug (Name lowercased+kebabed by meadow).
+						// Match by Name slug to be tolerant of either form.
+						let tmpMatch = tmpConns.find((c) =>
+						{
+							let tmpSlug = String(c.Name || '').toLowerCase().replace(/\s+/g, '-');
+							return tmpSlug === tmpHash || c.Name === tmpHash || String(c.Hash || '') === tmpHash;
+						});
+						if (!tmpMatch)
+						{
+							return this._sendError(pResponse, 404,
+								`No connection on beacon "${tmpName}" matched hash "${tmpHash}"`, fNext);
+						}
+
+						// Step 2 — introspect, then pick out the requested entity's columns.
+						this._dispatch(
+							{
+								Capability: 'DataBeaconManagement',
+								Action: 'Introspect',
+								Settings: { IDBeaconConnection: tmpMatch.IDBeaconConnection },
+								AffinityKey: tmpName,
+								TimeoutMs: 30000
+							},
+							(pIntErr, pIntResult) =>
+							{
+								if (pIntErr) return this._sendError(pResponse, 502, 'introspect: ' + pIntErr.message, fNext);
+								let tmpTables = ((pIntResult && pIntResult.Outputs) || pIntResult || {}).Tables || [];
+								let tmpTable = tmpTables.find((t) =>
+									(t.TableName === tmpEntity) || (t.Name === tmpEntity));
+								if (!tmpTable)
+								{
+									return this._sendError(pResponse, 404,
+										`No entity "${tmpEntity}" on beacon "${tmpName}" connection "${tmpHash}". ` +
+										`Available: ${tmpTables.slice(0, 8).map((t) => t.TableName || t.Name).join(', ')}`, fNext);
+								}
+								let tmpColumns = (tmpTable.Columns || []).map((c) =>
+									({ Name: c.Name || c.Column, DataType: c.DataType || c.Type || '' }));
+								pResponse.send({
+									BeaconName: tmpName,
+									ConnectionHash: tmpHash,
+									IDBeaconConnection: tmpMatch.IDBeaconConnection,
+									Entity: tmpEntity,
+									Columns: tmpColumns
+								});
+								return fNext();
+							});
+					});
+			});
+
 		pOratorServiceServer.doPost(`${tmpRoutePrefix}/beacon/:name/introspect`,
 			(pRequest, pResponse, fNext) =>
 			{
@@ -252,6 +330,11 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 
 		// ── MappingConfig CRUD ──────────────────────────────────
 
+		// Scope semantics for /mapper/mappings:
+		//   - GET ?scope=<value>  : '' = global only, * = no filter,
+		//                           any other value = exact match
+		//   - POST/PUT  : Scope read from body.Scope OR ?scope= query
+		//                 (body wins). Stored as-is, defaults to ''.
 		pOratorServiceServer.doGet(`${tmpRoutePrefix}/mappings`,
 			(pRequest, pResponse, fNext) =>
 			{
@@ -260,6 +343,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					pResponse.send({ Mappings: [] });
 					return fNext();
 				}
+				let tmpScope = (pRequest.query && pRequest.query.scope !== undefined) ? pRequest.query.scope : '';
 				let tmpQuery = this.fable.DAL.MappingConfig.query.clone().addFilter('Deleted', 0);
 				this.fable.DAL.MappingConfig.doReads(tmpQuery,
 					(pError, pQuery, pRecords) =>
@@ -268,7 +352,13 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						{
 							return this._sendError(pResponse, 500, pError.message || String(pError), fNext);
 						}
-						pResponse.send({ Count: pRecords.length, Mappings: pRecords });
+						let tmpFiltered = pRecords.filter((pR) =>
+						{
+							if (tmpScope === '*') return true;
+							let tmpRowScope = (pR.Scope === null || pR.Scope === undefined) ? '' : String(pR.Scope);
+							return tmpRowScope === String(tmpScope || '');
+						});
+						pResponse.send({ Count: tmpFiltered.length, Mappings: tmpFiltered });
 						return fNext();
 					});
 			});
@@ -281,8 +371,11 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					return this._sendError(pResponse, 500, 'MappingConfig DAL not initialized', fNext);
 				}
 				let tmpBody = pRequest.body || {};
+				let tmpQueryScope = (pRequest.query && pRequest.query.scope !== undefined && pRequest.query.scope !== '*')
+					? String(pRequest.query.scope) : '';
 				let tmpRecord =
 				{
+					Scope: (tmpBody.Scope !== undefined) ? String(tmpBody.Scope || '') : tmpQueryScope,
 					Name: tmpBody.Name || 'Untitled Mapping',
 					Description: tmpBody.Description || '',
 					SourceBeaconName: tmpBody.SourceBeaconName || '',
@@ -360,7 +453,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 
 						let tmpFields =
 						[
-							'Name', 'Description',
+							'Scope', 'Name', 'Description',
 							'SourceBeaconName', 'SourceConnectionHash', 'SourceEntity',
 							'TargetBeaconName', 'TargetConnectionHash', 'TargetEntity'
 						];
@@ -421,107 +514,535 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					});
 			});
 
-		// ── OperationTemplate CRUD ──────────────────────────────
+		// ─────────────────────────────────────────────────────────────
+		//  Dashboards (Phase 2 demo path)
+		//
+		//  Configs live on the configs-databeacon. Panel data lives on
+		//  whatever beacon + endpoint each panel references in its
+		//  Layout. Each request dispatches through the UV mesh with
+		//  AffinityKey set to the beacon's registered Name; UV's
+		//  Coordinator + Scheduler resolve that against findBeaconByName
+		//  and route the work item to the right beacon.
+		// ─────────────────────────────────────────────────────────────
 
-		pOratorServiceServer.doGet(`${tmpRoutePrefix}/operations`,
+		let _self = this;
+		function beaconRequest(pBeaconName, pPath, fCb)
+		{
+			beaconRequestEx(pBeaconName, 'GET', pPath, '', fCb);
+		}
+		// Multi-method variant — same dispatch path, takes a Method + Body.
+		// Both helpers route by AffinityKey=BeaconName via the UV mesh.
+		function beaconRequestEx(pBeaconName, pMethod, pPath, pBody, fCb)
+		{
+			_self._dispatch(
+				{
+					Capability: 'MeadowProxy',
+					Action: 'Request',
+					Settings:
+					{
+						Method:     pMethod,
+						Path:       pPath,
+						Body:       (pBody === undefined || pBody === null) ? '' : (typeof pBody === 'string' ? pBody : JSON.stringify(pBody)),
+						RemoteUser: ''
+					},
+					AffinityKey: pBeaconName,
+					TimeoutMs:   30000
+				},
+				(pError, pResult) =>
+				{
+					if (pError) return fCb(pError);
+					let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
+					let tmpStatus = tmpOutputs.Status;
+					let tmpBody = tmpOutputs.Body;
+					if (typeof (tmpStatus) === 'number' && tmpStatus >= 400)
+					{
+						let tmpSnippet = (typeof tmpBody === 'string') ? tmpBody.slice(0, 200) : '';
+						return fCb(new Error('beacon ' + pBeaconName + ' returned ' + tmpStatus + ': ' + tmpSnippet));
+					}
+					if (typeof (tmpBody) === 'string' && tmpBody)
+					{
+						try { return fCb(null, JSON.parse(tmpBody)); }
+						catch (pErr) { return fCb(new Error('beacon ' + pBeaconName + ' returned non-JSON: ' + pErr.message)); }
+					}
+					return fCb(null, tmpBody);
+				});
+		}
+
+		// Scope-aware row filter. Default scope '' means "global only"
+		// (empty / null Scope on the row). scope='*' means "any scope —
+		// don't filter". A non-empty scope value matches that exact value.
+		//
+		// We filter in JS rather than via meadow's FilteredTo URL because
+		// FBV~Field~EQ~ with an empty right-hand value is ambiguous in the
+		// URL grammar and doesn't reliably match empty strings vs nulls.
+		function _scopeMatches(pRow, pScope)
+		{
+			if (pScope === '*') return true;
+			let tmpRowScope = (pRow.Scope === null || pRow.Scope === undefined) ? '' : String(pRow.Scope);
+			return tmpRowScope === String(pScope || '');
+		}
+
+		// GET /mapper/dashboards?scope=<scope> — list available dashboards.
+		// scope='' (default) returns global dashboards only; a non-empty
+		// scope returns only dashboards in that scope; scope=* returns all.
+		pOratorServiceServer.doGet(`${tmpRoutePrefix}/dashboards`,
 			(pRequest, pResponse, fNext) =>
 			{
-				if (!this.fable.DAL || !this.fable.DAL.OperationTemplate)
-				{
-					pResponse.send({ Operations: [] });
-					return fNext();
-				}
-				let tmpQuery = this.fable.DAL.OperationTemplate.query.clone().addFilter('Deleted', 0);
-				this.fable.DAL.OperationTemplate.doReads(tmpQuery,
-					(pError, pQuery, pRecords) =>
+				let tmpScope = (pRequest.query && pRequest.query.scope !== undefined) ? pRequest.query.scope : '';
+				beaconRequest('configs-databeacon', '/1.0/platform-configs/DashboardConfigs',
+					(pError, pRows) =>
 					{
 						if (pError)
 						{
-							return this._sendError(pResponse, 500, pError.message || String(pError), fNext);
+							return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
 						}
-						pResponse.send({ Count: pRecords.length, Operations: pRecords });
+						let tmpRows = Array.isArray(pRows) ? pRows : [];
+						pResponse.send({
+							Dashboards: tmpRows.filter((pR) => _scopeMatches(pR, tmpScope)).map((pR) =>
+								({
+									IDDashboardConfig: pR.IDDashboardConfig,
+									Hash: pR.Hash,
+									Title: pR.Title,
+									Scope: pR.Scope || ''
+								}))
+						});
 						return fNext();
 					});
 			});
 
-		pOratorServiceServer.doPost(`${tmpRoutePrefix}/operations`,
+		// GET /mapper/dashboard/:hash?scope=<scope> — full config with
+		// parsed Layout. Lookup is by (Scope, Hash); two scopes can have
+		// dashboards with the same Hash without collision.
+		pOratorServiceServer.doGet(`${tmpRoutePrefix}/dashboard/:hash`,
 			(pRequest, pResponse, fNext) =>
 			{
-				if (!this.fable.DAL || !this.fable.DAL.OperationTemplate)
-				{
-					return this._sendError(pResponse, 500, 'OperationTemplate DAL not initialized', fNext);
-				}
+				let tmpHash = pRequest.params.hash;
+				let tmpScope = (pRequest.query && pRequest.query.scope !== undefined) ? pRequest.query.scope : '';
+				beaconRequest('configs-databeacon',
+					'/1.0/platform-configs/DashboardConfigs/FilteredTo/FBV~Hash~EQ~' + encodeURIComponent(tmpHash),
+					(pError, pRows) =>
+					{
+						if (pError)
+						{
+							return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						}
+						let tmpMatches = (Array.isArray(pRows) ? pRows : []).filter((pR) => _scopeMatches(pR, tmpScope));
+						if (tmpMatches.length === 0)
+						{
+							return _self._sendError(pResponse, 404, `Dashboard ${tmpHash} not found in scope "${tmpScope}"`, fNext);
+						}
+						let tmpRow = tmpMatches[0];
+						let tmpLayout = tmpRow.Layout;
+						try { tmpLayout = JSON.parse(tmpLayout); } catch (e) { /* keep as-is */ }
+						pResponse.send({
+							IDDashboardConfig: tmpRow.IDDashboardConfig,
+							Hash: tmpRow.Hash,
+							Scope: tmpRow.Scope || '',
+							Title: tmpRow.Title,
+							Layout: tmpLayout
+						});
+						return fNext();
+					});
+			});
+
+		// POST /mapper/dashboards?scope=<scope> — create a dashboard.
+		// Body: { Hash, Title, Layout }. Scope is taken from the body
+		// (preferred) or the ?scope= query, defaulting to '' (global).
+		// Layout is stringified into JSON for storage. Proxies to the
+		// configs beacon so storage is consistent with direct REST.
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/dashboards`,
+			(pRequest, pResponse, fNext) =>
+			{
 				let tmpBody = pRequest.body || {};
+				if (!tmpBody.Hash)
+				{
+					return _self._sendError(pResponse, 400, 'POST /mapper/dashboards requires Hash', fNext);
+				}
+				let tmpQueryScope = (pRequest.query && pRequest.query.scope !== undefined && pRequest.query.scope !== '*')
+					? String(pRequest.query.scope) : '';
 				let tmpRecord =
 				{
-					Name: tmpBody.Name || 'Untitled Operation',
-					Description: tmpBody.Description || '',
-					OperationHash: tmpBody.OperationHash || '',
-					OperationJSON: (typeof tmpBody.OperationJSON === 'string')
-						? tmpBody.OperationJSON
-						: JSON.stringify(tmpBody.OperationJSON || tmpBody.Operation || {})
+					Hash:   String(tmpBody.Hash),
+					Scope:  (tmpBody.Scope !== undefined) ? String(tmpBody.Scope || '') : tmpQueryScope,
+					Title:  tmpBody.Title || '',
+					Layout: (typeof tmpBody.Layout === 'string') ? tmpBody.Layout : JSON.stringify(tmpBody.Layout || {})
 				};
-
-				let tmpQuery = this.fable.DAL.OperationTemplate.query.clone()
-					.setIDUser(0)
-					.addRecord(tmpRecord);
-				this.fable.DAL.OperationTemplate.doCreate(tmpQuery,
-					(pError, pQuery, pQueryRead, pRecord) =>
+				beaconRequestEx('configs-databeacon', 'POST',
+					'/1.0/platform-configs/DashboardConfig', tmpRecord,
+					(pError, pResult) =>
 					{
-						if (pError)
-						{
-							return this._sendError(pResponse, 500, pError.message || String(pError), fNext);
-						}
-						pResponse.send({ Success: true, Operation: pRecord });
+						if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						pResponse.send({ Success: true, Dashboard: pResult });
 						return fNext();
 					});
 			});
 
-		// Run an operation on the Ultravisor (by hash)
-		pOratorServiceServer.doPost(`${tmpRoutePrefix}/operation/:hash/run`,
+		// PUT /mapper/dashboard/:id — update by primary key.
+		// Implementation note: meadow-endpoints' default surface does
+		// not expose PUT/PATCH on this beacon, so we read the existing
+		// record, soft-delete it, then insert a merged version. The
+		// (Scope, Hash) UNIQUE INDEX has WHERE Deleted=0, so the new
+		// row coexists with the soft-deleted one. The IDDashboardConfig
+		// changes — callers should re-fetch by Hash if they need the
+		// new ID.
+		pOratorServiceServer.doPut(`${tmpRoutePrefix}/dashboard/:id`,
 			(pRequest, pResponse, fNext) =>
 			{
-				let tmpHash = pRequest.params.hash;
-				let tmpClient = this._client();
-				if (!tmpClient)
+				let tmpID = parseInt(pRequest.params.id, 10);
+				if (!tmpID)
 				{
-					return this._sendError(pResponse, 503, 'Not connected to an Ultravisor', fNext);
+					return _self._sendError(pResponse, 400, 'PUT /mapper/dashboard/:id requires numeric ID', fNext);
 				}
-				tmpClient.request('POST', `/Operation/${tmpHash}/Trigger`, null,
+				let tmpBody = pRequest.body || {};
+
+				// Step 1 — fetch the existing record so we can merge.
+				beaconRequestEx('configs-databeacon', 'GET',
+					'/1.0/platform-configs/DashboardConfig/' + tmpID, null,
+					(pReadErr, pExisting) =>
+					{
+						if (pReadErr) return _self._sendError(pResponse, 502, pReadErr.message || String(pReadErr), fNext);
+						if (!pExisting || !pExisting.IDDashboardConfig)
+						{
+							return _self._sendError(pResponse, 404, 'Dashboard ' + tmpID + ' not found', fNext);
+						}
+
+						// Merge body into existing — only Hash, Scope, Title, Layout are mutable.
+						let tmpMerged = {
+							Hash:   (tmpBody.Hash !== undefined) ? String(tmpBody.Hash) : pExisting.Hash,
+							Scope:  (tmpBody.Scope !== undefined) ? String(tmpBody.Scope || '') : (pExisting.Scope || ''),
+							Title:  (tmpBody.Title !== undefined) ? tmpBody.Title : pExisting.Title,
+							Layout: (tmpBody.Layout !== undefined)
+								? (typeof tmpBody.Layout === 'string' ? tmpBody.Layout : JSON.stringify(tmpBody.Layout))
+								: pExisting.Layout
+						};
+
+						// Step 2 — soft-delete the existing row.
+						beaconRequestEx('configs-databeacon', 'DELETE',
+							'/1.0/platform-configs/DashboardConfig/' + tmpID, null,
+							(pDelErr) =>
+							{
+								if (pDelErr) return _self._sendError(pResponse, 502, pDelErr.message || String(pDelErr), fNext);
+								// Step 3 — insert the merged version.
+								beaconRequestEx('configs-databeacon', 'POST',
+									'/1.0/platform-configs/DashboardConfig', tmpMerged,
+									(pInsErr, pInserted) =>
+									{
+										if (pInsErr) return _self._sendError(pResponse, 502, pInsErr.message || String(pInsErr), fNext);
+										pResponse.send({ Success: true, Dashboard: pInserted });
+										return fNext();
+									});
+							});
+					});
+			});
+
+		// DELETE /mapper/dashboard/:id — soft-delete by primary key.
+		pOratorServiceServer.doDel(`${tmpRoutePrefix}/dashboard/:id`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpID = parseInt(pRequest.params.id, 10);
+				if (!tmpID)
+				{
+					return _self._sendError(pResponse, 400, 'DELETE /mapper/dashboard/:id requires numeric ID', fNext);
+				}
+				beaconRequestEx('configs-databeacon', 'DELETE',
+					'/1.0/platform-configs/DashboardConfig/' + tmpID, null,
 					(pError, pResult) =>
 					{
-						if (pError)
-						{
-							return this._sendError(pResponse, 502, pError.message || String(pError), fNext);
-						}
-						pResponse.send(pResult || { Success: true });
+						if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
+						pResponse.send({ Success: true, Result: pResult });
 						return fNext();
 					});
 			});
 
-		pOratorServiceServer.doGet(`${tmpRoutePrefix}/operation/:hash/status`,
+		// POST /mapper/dashboard/panel-data — fetch one panel's data
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/dashboard/panel-data`,
 			(pRequest, pResponse, fNext) =>
 			{
-				let tmpHash = pRequest.params.hash;
-				let tmpClient = this._client();
-				if (!tmpClient)
+				let tmpBody = pRequest.body || {};
+				if (!tmpBody.BeaconName || !tmpBody.ConnectionName || !tmpBody.Endpoint)
 				{
-					return this._sendError(pResponse, 503, 'Not connected to an Ultravisor', fNext);
+					return _self._sendError(pResponse, 400,
+						'panel-data requires BeaconName, ConnectionName, Endpoint', fNext);
 				}
-				tmpClient.request('GET', `/Operation/${tmpHash}`, null,
-					(pError, pResult) =>
+				let tmpPageSize = parseInt(tmpBody.PageSize, 10) || 50;
+				let tmpPage = parseInt(tmpBody.Page, 10) || 0;
+				let tmpBegin = tmpPage * tmpPageSize;
+				// Meadow-endpoints uses path-based pagination: <base>/<begin>/<count>
+				// (not query string). The plural-table convention is meadow's too.
+				let tmpPath = '/1.0/' + tmpBody.ConnectionName + '/' + tmpBody.Endpoint + 's'
+					+ '/' + tmpBegin + '/' + tmpPageSize;
+				beaconRequest(tmpBody.BeaconName, tmpPath,
+					(pError, pRows) =>
 					{
 						if (pError)
 						{
-							return this._sendError(pResponse, 502, pError.message || String(pError), fNext);
+							return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
 						}
-						pResponse.send(pResult || {});
+						pResponse.send({
+							Rows: Array.isArray(pRows) ? pRows : [],
+							Page: tmpPage,
+							PageSize: tmpPageSize
+						});
+						return fNext();
+					});
+			});
+
+		// ── Ultravisor pass-through (compile + run via UV) ──────
+		// This is the "glue" surface — the data-mapper UI calls these
+		// to compile a stored MappingConfig into a fully-unfolded
+		// Pull→Map→Write Ultravisor Operation, persist it on UV, run
+		// it through UV's queue, and return the manifest. UV owns
+		// execution, scheduling, and observability — the data-mapper
+		// only describes the intent.
+
+		// POST /mapper/uv/run-mapping/:id
+		// Compile the MappingConfig identified by :id into an Operation
+		// graph, POST it to UV's /Operation, trigger via /Operation/:Hash/Trigger
+		// (synchronous — the Trigger endpoint returns the completed manifest
+		// inline for ops that finish quickly), return both the assigned
+		// OperationHash and the run summary.
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/uv/run-mapping/:id`,
+			(pRequest, pResponse, fNext) =>
+			{
+				if (!this.fable.DAL || !this.fable.DAL.MappingConfig)
+				{
+					return _self._sendError(pResponse, 500, 'MappingConfig DAL not initialized', fNext);
+				}
+				let tmpClient = _self._client();
+				if (!tmpClient)
+				{
+					return _self._sendError(pResponse, 503, 'Not connected to an Ultravisor', fNext);
+				}
+				let tmpID = parseInt(pRequest.params.id, 10);
+				if (!tmpID) return _self._sendError(pResponse, 400, 'POST /mapper/uv/run-mapping/:id requires numeric ID', fNext);
+
+				let tmpReadQ = this.fable.DAL.MappingConfig.query.clone()
+					.addFilter('IDMappingConfig', tmpID);
+				this.fable.DAL.MappingConfig.doRead(tmpReadQ,
+					(pErr, pQuery, pMapping) =>
+					{
+						if (pErr || !pMapping || !pMapping.IDMappingConfig)
+						{
+							return _self._sendError(pResponse, 404, 'Mapping ' + tmpID + ' not found', fNext);
+						}
+						let tmpGraph = _self._compileMappingToOperation(pMapping);
+						_self._request('POST', '/Operation', tmpGraph,
+							(pPostErr, pCreated) =>
+							{
+								if (pPostErr) return _self._sendError(pResponse, 502, 'UV /Operation failed: ' + pPostErr.message, fNext);
+								let tmpHash = (pCreated && pCreated.Hash) || (tmpGraph && tmpGraph.Hash);
+								if (!tmpHash) return _self._sendError(pResponse, 502, 'UV /Operation returned no Hash', fNext);
+
+								_self._request('POST', '/Operation/' + tmpHash + '/Trigger', {},
+									(pTrigErr, pManifest) =>
+									{
+										if (pTrigErr) return _self._sendError(pResponse, 502, 'UV /Trigger failed: ' + pTrigErr.message, fNext);
+										pResponse.send({
+											Success:        pManifest && (pManifest.Status === 'Complete'),
+											OperationHash:  tmpHash,
+											OperationName:  tmpGraph.Name,
+											RunHash:        pManifest && pManifest.RunHash,
+											Status:         pManifest && pManifest.Status,
+											ElapsedMs:      pManifest && pManifest.ElapsedMs,
+											TaskOutputs:    _self._summarizeTaskOutputs(pManifest && pManifest.TaskOutputs),
+											Errors:         pManifest && pManifest.Errors
+										});
+										return fNext();
+									});
+							});
+					});
+			});
+
+		// GET /mapper/uv/operations — list UV operations (scope-agnostic
+		// for now; UV's Operations don't have the same Scope concept
+		// as MappingConfig).
+		pOratorServiceServer.doGet(`${tmpRoutePrefix}/uv/operations`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpClient = _self._client();
+				if (!tmpClient) { pResponse.send({ Operations: [] }); return fNext(); }
+				_self._request('GET', '/Operation', null,
+					(pErr, pResult) =>
+					{
+						if (pErr) return _self._sendError(pResponse, 502, pErr.message || String(pErr), fNext);
+						let tmpOps = Array.isArray(pResult) ? pResult : (pResult && pResult.Operations) || [];
+						pResponse.send({ Count: tmpOps.length, Operations: tmpOps.map((o) =>
+							({ Hash: o.Hash, Name: o.Name, Description: o.Description, Tags: o.Tags || [] })) });
+						return fNext();
+					});
+			});
+
+		// GET /mapper/uv/manifest/:runHash — fetch a manifest for display.
+		pOratorServiceServer.doGet(`${tmpRoutePrefix}/uv/manifest/:runHash`,
+			(pRequest, pResponse, fNext) =>
+			{
+				let tmpClient = _self._client();
+				if (!tmpClient) return _self._sendError(pResponse, 503, 'Not connected to an Ultravisor', fNext);
+				_self._request('GET', '/Manifest/' + pRequest.params.runHash, null,
+					(pErr, pManifest) =>
+					{
+						if (pErr) return _self._sendError(pResponse, 502, pErr.message || String(pErr), fNext);
+						pResponse.send(pManifest);
 						return fNext();
 					});
 			});
 
 		this.fable.log.info(`DataMapper ConnectionBridge routes connected at ${tmpRoutePrefix}/*`);
 	}
+
+	/**
+	 * Compile a MappingConfig record into the canonical Pull → Map →
+	 * Comprehension → Write Ultravisor Operation graph.
+	 *
+	 *   Pull (data-mapper beacon)        — paginated read of source entity
+	 *     ↓ State: Records[]
+	 *   Map  (data-mapper beacon)        — TabularTransform per MappingConfiguration
+	 *     ↓ State: Records[] (mapped, with deterministic GUID per GUIDTemplate)
+	 *   Comprehension (data-mapper beacon) — keys mapped records by GUID into { Entity: { GUID: row } }
+	 *     ↓ State: Comprehension{}
+	 *   Write (data-mapper beacon)       — bulk Upserts via meadow-integration to the target meadow REST
+	 *
+	 * The 4-step shape is the canonical example from
+	 * `examples/sample-operation.json`. The Comprehension node is the
+	 * accumulator that makes upsert idempotent — meadow decides PUT vs
+	 * INSERT per row by matching GUID<Entity>, and the deterministic
+	 * combinatorial GUID in the MappingConfiguration's GUIDTemplate is
+	 * what ties source rows to their lake-side identity.
+	 */
+	_compileMappingToOperation(pMapping)
+	{
+		let tmpMC = pMapping.MappingConfiguration || {};
+		if (typeof tmpMC === 'string')
+		{
+			try { tmpMC = JSON.parse(tmpMC); } catch (e) { tmpMC = {}; }
+		}
+		let tmpMCString = JSON.stringify(tmpMC);
+
+		let tmpEntity = pMapping.TargetEntity || tmpMC.Entity || 'Record';
+		let tmpGUIDField = tmpMC.GUIDName || ('GUID' + tmpEntity);
+
+		let tmpHashSeed = (pMapping.Hash || ('mapping-' + pMapping.IDMappingConfig));
+		let tmpName = pMapping.Name || ('Mapping ' + (pMapping.Hash || pMapping.IDMappingConfig));
+
+		return {
+			Name: tmpName,
+			Description: pMapping.Description || '',
+			Tags: ['data-mapper', 'mapping', tmpHashSeed],
+			Author: 'retold-data-mapper',
+			Version: '1.0.0',
+			Graph: {
+				Nodes: [
+					{ Hash: 'start', Type: 'start', X: 50, Y: 200, Width: 100, Height: 60, Title: 'Start',
+					  Ports: [ { Hash: 'start-eo-out', Direction: 'output', Side: 'right-bottom' } ] },
+
+					{ Hash: 'pull', Type: 'beacon-datamapperrecords-pullrecords',
+					  X: 220, Y: 180, Width: 220, Height: 140, Title: 'Pull ' + (pMapping.SourceEntity || '?'),
+					  Ports: [
+						{ Hash: 'p-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'p-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'p-so-Result',   Direction: 'output', Side: 'right-top',    Label: 'Result' }
+					  ],
+					  Data: {
+						SourceBeaconName: pMapping.SourceBeaconName || '',
+						ConnectionHash:   pMapping.SourceConnectionHash || '',
+						Entity:           pMapping.SourceEntity || '',
+						BatchSize:        100,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'map', Type: 'beacon-datamappertransform-maprecords',
+					  X: 480, Y: 180, Width: 220, Height: 140, Title: 'Map → ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'm-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'm-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'm-si-Records',  Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'm-so-Result',   Direction: 'output', Side: 'right-top',   Label: 'Result' }
+					  ],
+					  Data: {
+						MappingConfiguration: tmpMCString,
+						AffinityKey:          'data-mapper'
+					  }
+					},
+
+					{ Hash: 'comprehension', Type: 'beacon-datamappertransform-buildcomprehension',
+					  X: 740, Y: 180, Width: 240, Height: 140, Title: 'Comprehend ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'c-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'c-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'c-si-Records',       Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'c-so-Comprehension', Direction: 'output', Side: 'right-top',   Label: 'Comprehension' }
+					  ],
+					  Data: {
+						Entity:       tmpEntity,
+						GUIDField:    tmpGUIDField,
+						AffinityKey:  'data-mapper'
+					  }
+					},
+
+					{ Hash: 'write', Type: 'beacon-datamapperrecords-writerecords',
+					  X: 1020, Y: 180, Width: 240, Height: 140, Title: 'Upsert ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'w-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'w-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'w-si-Comprehension', Direction: 'input',  Side: 'left-top',    Label: 'Comprehension' }
+					  ],
+					  Data: {
+						TargetBeaconName: pMapping.TargetBeaconName || '',
+						ConnectionHash:   pMapping.TargetConnectionHash || '',
+						Entity:           tmpEntity,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'end', Type: 'end', X: 1300, Y: 220, Width: 100, Height: 60, Title: 'End',
+					  Ports: [ { Hash: 'end-ei-in', Direction: 'input', Side: 'left-bottom' } ] }
+				],
+				Connections: [
+					// Event flow
+					{ SourceNodeHash: 'start',         SourcePortHash: 'start-eo-out',   TargetNodeHash: 'pull',          TargetPortHash: 'p-ei-Trigger' },
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-eo-Complete',  TargetNodeHash: 'map',           TargetPortHash: 'm-ei-Trigger' },
+					{ SourceNodeHash: 'map',           SourcePortHash: 'm-eo-Complete',  TargetNodeHash: 'comprehension', TargetPortHash: 'c-ei-Trigger' },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-eo-Complete',  TargetNodeHash: 'write',         TargetPortHash: 'w-ei-Trigger' },
+					{ SourceNodeHash: 'write',         SourcePortHash: 'w-eo-Complete',  TargetNodeHash: 'end',           TargetPortHash: 'end-ei-in' },
+
+					// State (data) flow
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-so-Result',         TargetNodeHash: 'map',           TargetPortHash: 'm-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'map',           SourcePortHash: 'm-so-Result',         TargetNodeHash: 'comprehension', TargetPortHash: 'c-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-so-Comprehension',  TargetNodeHash: 'write',         TargetPortHash: 'w-si-Comprehension', ConnectionType: 'State', Data: { StateKey: 'Comprehension' } }
+				],
+				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
+			}
+		};
+	}
+
+	/**
+	 * Reduce a UV manifest's TaskOutputs (which can include the full
+	 * record arrays for each step) to just the count fields the UI
+	 * needs to render a result panel. Keeps the response small.
+	 */
+	_summarizeTaskOutputs(pTaskOutputs)
+	{
+		if (!pTaskOutputs || typeof pTaskOutputs !== 'object') return {};
+		let tmpSummary = {};
+		let tmpKeys = Object.keys(pTaskOutputs);
+		for (let i = 0; i < tmpKeys.length; i++)
+		{
+			let tmpKey = tmpKeys[i];
+			let tmpVal = pTaskOutputs[tmpKey];
+			if (!tmpVal || typeof tmpVal !== 'object') continue;
+			let tmpRow = {};
+			if ('RecordCount' in tmpVal) tmpRow.RecordCount = tmpVal.RecordCount;
+			if ('Written'     in tmpVal) tmpRow.Written     = tmpVal.Written;
+			if ('Errors'      in tmpVal)
+			{
+				tmpRow.Errors = Array.isArray(tmpVal.Errors) ? tmpVal.Errors.length : (tmpVal.Errors || 0);
+			}
+			tmpSummary[tmpKey] = tmpRow;
+		}
+		return tmpSummary;
+	}
+
 }
 
 module.exports = DataMapperConnectionBridge;

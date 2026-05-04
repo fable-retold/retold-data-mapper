@@ -18,6 +18,13 @@
 const libFableServiceProviderBase = require('fable-serviceproviderbase');
 const libFableUltravisorClient = require('fable-ultravisor-client');
 
+// meadow-integration's IntegrationAdapter handles upsert + batching + retry
+// + audit-column stripping when pushing a comprehension. Loaded eagerly so
+// WriteRecords doesn't pay the require cost mid-dispatch.
+const libMeadowIntegrationAdapter = require('meadow-integration/source/Meadow-Service-Integration-Adapter.js');
+const libMeadowCloneRestClient    = require('meadow-integration/source/services/clone/Meadow-Service-RestClient.js');
+const libMeadowGUIDMap            = require('meadow-integration/source/Meadow-Service-Integration-GUIDMap.js');
+
 let libTabularTransform = null;
 try
 {
@@ -188,7 +195,8 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'SourceBeaconName', DataType: 'String', Required: true, Description: 'Beacon name of the data source' },
 							{ Name: 'ConnectionHash', DataType: 'String', Required: true, Description: 'URL slug of the source connection' },
 							{ Name: 'Entity', DataType: 'String', Required: true, Description: 'Entity/table name to read' },
-							{ Name: 'BatchSize', DataType: 'Number', Required: false, Description: 'Records per page (default 100)' }
+							{ Name: 'BatchSize', DataType: 'Number', Required: false, Description: 'Records per page (default 100)' },
+							{ Name: 'FilterExpression', DataType: 'String', Required: false, Description: 'Meadow filter (e.g. FBV~Field~EQ~Value); spliced into URL as /FilteredTo/<expr>' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
@@ -197,6 +205,9 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpConnectionHash = tmpSettings.ConnectionHash;
 							let tmpEntity = tmpSettings.Entity;
 							let tmpBatchSize = tmpSettings.BatchSize || 100;
+							let tmpFilterSegment = tmpSettings.FilterExpression
+								? '/FilteredTo/' + tmpSettings.FilterExpression
+								: '';
 
 							if (!tmpSelf._Client || !tmpBeaconName || !tmpConnectionHash || !tmpEntity)
 							{
@@ -212,8 +223,12 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 
 							let fReadBatch = () =>
 							{
-								let tmpPath = `/1.0/${tmpConnectionHash}/${tmpEntity}s/${tmpOffset}/${tmpBatchSize}`;
+								let tmpPath = `/1.0/${tmpConnectionHash}/${tmpEntity}s${tmpFilterSegment}/${tmpOffset}/${tmpBatchSize}`;
 
+								// Dispatch through the UV mesh; AffinityKey now routes
+								// by beacon Name (UV Coordinator + Scheduler resolve
+								// AffinityKey against findBeaconByName), so the work
+								// item reliably lands on the source beacon.
 								tmpSelf._dispatch(
 									{
 										Capability: 'MeadowProxy',
@@ -264,92 +279,166 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 
 					'WriteRecords':
 					{
-						Description: 'Write records to a target beacon entity',
+						Description: 'Push a comprehension to a target beacon entity using meadow-endpoints bulk Upserts (PUT /<Entity>s/Upserts), routed through the UV mesh by AffinityKey=TargetBeaconName.',
 						SettingsSchema:
 						[
-							{ Name: 'TargetBeaconName', DataType: 'String', Required: true, Description: 'Beacon name of the target' },
-							{ Name: 'ConnectionHash', DataType: 'String', Required: true, Description: 'URL slug of the target connection' },
-							{ Name: 'Entity', DataType: 'String', Required: true, Description: 'Target entity name' },
-							{ Name: 'Records', DataType: 'Array', Required: true, Description: 'Records to write' }
+							{ Name: 'TargetBeaconName', DataType: 'String', Required: true, Description: 'Beacon name of the target (UV mesh AffinityKey).' },
+							{ Name: 'ConnectionHash',   DataType: 'String', Required: true, Description: 'URL slug of the target connection (the beacon\'s meadow REST is at /1.0/<ConnectionHash>/).' },
+							{ Name: 'Entity',           DataType: 'String', Required: false, Description: 'Target entity name. Informational when Comprehension is supplied; meadow upserts each entity in the comprehension by its key.' },
+							{ Name: 'Comprehension',    DataType: 'Object', Required: false, Description: 'Comprehension { <Entity>: { <GUID>: <record>, ... } }. Preferred input; flows from the BuildComprehension node.' },
+							{ Name: 'Records',          DataType: 'Array',  Required: false, Description: 'Back-compat: bare records array. If provided without Comprehension, will be wrapped into { <Entity>: { <i>: <record> } }.' },
+							{ Name: 'BulkChunkSize',    DataType: 'Number', Required: false, Description: 'Records per bulk Upserts call. Default 100. Lower for very wide rows; higher for narrow rows on a fast target.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
-							let tmpSettings = pWorkItem.Settings || {};
+							let tmpSettings  = pWorkItem.Settings || {};
 							let tmpBeaconName = tmpSettings.TargetBeaconName;
-							let tmpConnectionHash = tmpSettings.ConnectionHash;
-							let tmpEntity = tmpSettings.Entity;
-							let tmpRecords = tmpSettings.Records || [];
+							let tmpConnHash   = tmpSettings.ConnectionHash;
+							let tmpEntityHint = tmpSettings.Entity;
 
-							if (typeof (tmpRecords) === 'string')
+							let tmpComprehension = tmpSettings.Comprehension;
+							let tmpRecords       = tmpSettings.Records;
+							if (typeof (tmpComprehension) === 'string') { try { tmpComprehension = JSON.parse(tmpComprehension); } catch (e) { tmpComprehension = null; } }
+							if (typeof (tmpRecords)       === 'string') { try { tmpRecords       = JSON.parse(tmpRecords); }       catch (e) { tmpRecords = null; } }
+
+							// Wrap a bare records array into a single-entity
+							// comprehension so the rest of the handler is uniform.
+							if (!tmpComprehension && Array.isArray(tmpRecords) && tmpEntityHint)
 							{
-								try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpRecords = []; }
+								tmpComprehension = {};
+								tmpComprehension[tmpEntityHint] = {};
+								for (let i = 0; i < tmpRecords.length; i++)
+								{
+									let tmpRow = tmpRecords[i];
+									let tmpGUIDKey = (tmpRow && tmpRow['GUID' + tmpEntityHint]) ? String(tmpRow['GUID' + tmpEntityHint]) : ('record-' + i);
+									tmpComprehension[tmpEntityHint][tmpGUIDKey] = tmpRow;
+								}
 							}
 
-							if (!tmpSelf._Client || !tmpBeaconName || !tmpConnectionHash || !tmpEntity)
+							if (!tmpSelf._Client || !tmpComprehension || typeof (tmpComprehension) !== 'object' || !tmpBeaconName || !tmpConnHash)
 							{
 								return fHandlerCallback(null, {
-									Outputs: { Written: 0, Errors: 0, ErrorLog: [] },
-									Log: ['WriteRecords: missing required settings.']
+									Outputs: { Written: 0, Errors: 0, ErrorLog: [], EntitiesWritten: [] },
+									Log: ['WriteRecords: TargetBeaconName, ConnectionHash, and a Comprehension (or Records + Entity) are required, and an UltravisorClient must be configured.']
 								});
 							}
 
-							let tmpWritten = 0;
-							let tmpErrors = 0;
-							let tmpErrorLog = [];
-							let tmpIndex = 0;
+							// Iterate the comprehension's entities. For each,
+							// PUT the bulk /Upserts endpoint via MeadowProxy.
+							// UV resolves AffinityKey=TargetBeaconName to the
+							// right beacon URL — we don't need to know the
+							// beacon's hostname or port directly. meadow-
+							// endpoints decides per-row PUT vs INSERT by
+							// matching GUID<Entity>, so a stable combinatorial
+							// GUIDTemplate in the MappingConfiguration makes
+							// re-runs idempotent without dupe-key errors.
+							let tmpEntityKeys = Object.keys(tmpComprehension);
+							let tmpEntityIdx = 0;
+							let tmpTotalWritten = 0;
+							let tmpTotalErrors  = 0;
+							let tmpErrorLog     = [];
+							let tmpEntitiesWritten = [];
+							let tmpEntityCounts = {};
 
-							let fWriteNext = () =>
+							let fNextEntity = () =>
 							{
-								if (tmpIndex >= tmpRecords.length)
+								if (tmpEntityIdx >= tmpEntityKeys.length)
 								{
 									return fHandlerCallback(null, {
-										Outputs: { Written: tmpWritten, Errors: tmpErrors, ErrorLog: tmpErrorLog },
-										Log: [`WriteRecords: ${tmpWritten} written, ${tmpErrors} errors on beacon [${tmpBeaconName}] entity [${tmpEntity}].`]
+										Outputs: {
+											Written:          tmpTotalWritten,
+											Errors:           tmpTotalErrors,
+											ErrorLog:         tmpErrorLog,
+											EntitiesWritten:  tmpEntitiesWritten,
+											PerEntity:        tmpEntityCounts
+										},
+										Log: [`WriteRecords (Upsert → ${tmpBeaconName}/${tmpConnHash}): ${tmpTotalWritten} written across ${tmpEntitiesWritten.length} entity(ies), ${tmpTotalErrors} errors.`]
 									});
 								}
+								let tmpEntity = tmpEntityKeys[tmpEntityIdx];
+								tmpEntityIdx++;
 
-								let tmpRecord = tmpRecords[tmpIndex];
-								tmpIndex++;
+								let tmpEntityMap = tmpComprehension[tmpEntity] || {};
+								let tmpRowKeys = Object.keys(tmpEntityMap);
+								if (tmpRowKeys.length === 0)
+								{
+									tmpEntityCounts[tmpEntity] = { Written: 0, Errors: 0 };
+									return fNextEntity();
+								}
 
-								tmpSelf._dispatch(
+								let tmpRowArr = tmpRowKeys.map((k) => tmpEntityMap[k]);
+								// meadow-endpoints' BULK Upsert: PUT
+								// /1.0/<ConnectionHash>/<Entity>/Upserts with the
+								// records ARRAY body. Meadow looks up each row
+								// by GUID<Entity> and decides UPDATE vs INSERT.
+								// Chunked into BulkChunkSize batches so very
+								// large comprehensions don't blow timeouts.
+								let tmpPath = `/1.0/${tmpConnHash}/${tmpEntity}/Upserts`;
+								let tmpChunkSize = tmpSettings.BulkChunkSize || 100;
+								let tmpEntityWritten = 0;
+								let tmpEntityErrors  = 0;
+								let tmpChunkOffset = 0;
+
+								let fNextChunk = () =>
+								{
+									if (tmpChunkOffset >= tmpRowArr.length)
 									{
-										Capability: 'MeadowProxy',
-										Action: 'Request',
-										Settings:
+										if (tmpEntityWritten > 0) tmpEntitiesWritten.push(tmpEntity);
+										tmpTotalWritten += tmpEntityWritten;
+										tmpTotalErrors  += tmpEntityErrors;
+										tmpEntityCounts[tmpEntity] = { Written: tmpEntityWritten, Errors: tmpEntityErrors };
+										return fNextEntity();
+									}
+									let tmpChunk = tmpRowArr.slice(tmpChunkOffset, tmpChunkOffset + tmpChunkSize);
+									let tmpChunkLen = tmpChunk.length;
+									tmpChunkOffset += tmpChunkLen;
+									let tmpBodyStr = JSON.stringify(tmpChunk);
+
+									tmpSelf._dispatch(
 										{
-											Method: 'POST',
-											Path: `/1.0/${tmpConnectionHash}/${tmpEntity}`,
-											Body: JSON.stringify(tmpRecord),
-											RemoteUser: ''
-										},
-										AffinityKey: tmpBeaconName,
-										TimeoutMs: 30000
-									},
-									(pError, pResult) =>
-									{
-										if (pError)
-										{
-											tmpErrors++;
-											tmpErrorLog.push({ Index: tmpIndex - 1, Error: pError.message });
-										}
-										else
-										{
-											let tmpOut = (pResult && pResult.Outputs) || {};
-											if (typeof (tmpOut.Status) === 'number' && tmpOut.Status >= 400)
+											Capability: 'MeadowProxy',
+											Action:     'Request',
+											Settings:
 											{
-												tmpErrors++;
-												tmpErrorLog.push({ Index: tmpIndex - 1, Error: `HTTP ${tmpOut.Status}` });
+												Method:     'PUT',
+												Path:       tmpPath,
+												Body:       tmpBodyStr,
+												RemoteUser: ''
+											},
+											AffinityKey: tmpBeaconName,
+											TimeoutMs:   60000
+										},
+										(pErr, pResult) =>
+										{
+											if (pErr)
+											{
+												tmpEntityErrors += tmpChunkLen;
+												tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpChunkOffset - tmpChunkLen, Error: pErr.message || String(pErr) });
 											}
 											else
 											{
-												tmpWritten++;
+												let tmpOut = (pResult && pResult.Outputs) || {};
+												let tmpStatus = tmpOut.Status;
+												if (typeof (tmpStatus) === 'number' && tmpStatus >= 400)
+												{
+													tmpEntityErrors += tmpChunkLen;
+													let tmpSnippet = (typeof tmpOut.Body === 'string') ? tmpOut.Body.slice(0, 160) : '';
+													tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpChunkOffset - tmpChunkLen, Error: `HTTP ${tmpStatus}: ${tmpSnippet}` });
+												}
+												else
+												{
+													// meadow's bulk Upserts returns
+													// an ack array of length =
+													// input length on success.
+													tmpEntityWritten += tmpChunkLen;
+												}
 											}
-										}
-										fWriteNext();
-									});
+											fNextChunk();
+										});
+								};
+								fNextChunk();
 							};
-
-							fWriteNext();
+							fNextEntity();
 						}
 					}
 				}

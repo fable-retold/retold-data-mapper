@@ -21,16 +21,22 @@ function _getService(pTask, pTypeName)
 
 /**
  * Read all records from a beacon entity via paginated MeadowProxy:Request GET.
+ * When pFilterExpression is supplied (meadow filter syntax — e.g.
+ * "FBV~StateName~EQ~TX") it is spliced into the URL as
+ * /<entity>s/FilteredTo/<expression>/<offset>/<count>.
  */
-function _readAllRecords(pCoordinator, pBeaconName, pConnectionHash, pEntity, pBatchSize, fCallback)
+function _readAllRecords(pCoordinator, pBeaconName, pConnectionHash, pEntity, pBatchSize, pFilterExpression, fCallback)
 {
 	let tmpAllRecords = [];
 	let tmpOffset = 0;
 	let tmpBatchSize = pBatchSize || 100;
+	let tmpFilterSegment = pFilterExpression
+		? '/FilteredTo/' + pFilterExpression
+		: '';
 
 	let fReadBatch = () =>
 	{
-		let tmpPath = `/1.0/${pConnectionHash}/${pEntity}s/${tmpOffset}/${tmpBatchSize}`;
+		let tmpPath = `/1.0/${pConnectionHash}/${pEntity}s${tmpFilterSegment}/${tmpOffset}/${tmpBatchSize}`;
 		let tmpWorkItem = {
 			Capability: 'MeadowProxy',
 			Action: 'Request',
@@ -97,6 +103,7 @@ function _handleExecute(pTask, pResolvedSettings, pExecutionContext, fCallback)
 	let tmpConnectionHash = pResolvedSettings.ConnectionHash;
 	let tmpEntity = pResolvedSettings.Entity;
 	let tmpBatchSize = pResolvedSettings.BatchSize || 100;
+	let tmpFilterExpression = pResolvedSettings.FilterExpression || '';
 
 	if (!tmpBeaconName || !tmpConnectionHash || !tmpEntity)
 	{
@@ -107,7 +114,7 @@ function _handleExecute(pTask, pResolvedSettings, pExecutionContext, fCallback)
 		});
 	}
 
-	_readAllRecords(tmpCoordinator, tmpBeaconName, tmpConnectionHash, tmpEntity, tmpBatchSize,
+	_readAllRecords(tmpCoordinator, tmpBeaconName, tmpConnectionHash, tmpEntity, tmpBatchSize, tmpFilterExpression,
 		(pError, pRecords) =>
 		{
 			if (pError)
