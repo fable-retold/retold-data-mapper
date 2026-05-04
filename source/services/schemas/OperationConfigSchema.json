@@ -33,7 +33,12 @@
 				{ "Column": "TargetBeaconName",        "Type": "String",       "Size": "200" },
 				{ "Column": "TargetConnectionHash",    "Type": "String",       "Size": "200" },
 				{ "Column": "TargetTable",             "Type": "String",       "Size": "200" },
-				{ "Column": "OperationConfiguration",  "Type": "String",       "Size": "Default" }
+				{ "Column": "OperationConfiguration",  "Type": "String",       "Size": "Default" },
+				{ "Column": "DependsOn",                 "Type": "String",       "Size": "Default" },
+				{ "Column": "ResetMode",                 "Type": "String",       "Size": "16"      },
+				{ "Column": "Concurrency",               "Type": "Integer",      "Size": "int"     },
+				{ "Column": "CompiledOperationHash",     "Type": "String",       "Size": "200"     },
+				{ "Column": "CompiledOperationConfigHash","Type": "String",      "Size": "200"     }
 			],
 			"DefaultObject":
 			{
@@ -57,7 +62,12 @@
 				"TargetBeaconName": "",
 				"TargetConnectionHash": "",
 				"TargetTable": "",
-				"OperationConfiguration": "{}"
+				"OperationConfiguration": "{}",
+				"DependsOn": "[]",
+				"ResetMode": "Append",
+				"Concurrency": 0,
+				"CompiledOperationHash": "",
+				"CompiledOperationConfigHash": ""
 			},
 			"Indexes":
 			[
@@ -72,6 +82,11 @@
 		"OperationType":            "One of: Extraction | Aggregation | Histogram | Intersection. The data-mapper bridge dispatches by this value at compile time.",
 		"OperationConfiguration":   "Type-specific JSON blob. See PLAN-PHASE-2B-Operation-Types.md §3 for the per-type shape.",
 		"TargetTable":              "Lake table name where the result lands. The data-mapper ensures this table on the target beacon (typically lake-databeacon) via DataBeaconSchema:EnsureSchema before the first run.",
+		"DependsOn":                "JSON-encoded array of OperationConfig hashes this op reads from (e.g. [\"weather-reading-enriched\"]). POST /mapper/uv/run-chain/:id walks the DAG topologically, fails fast on cycles, halts on first error.",
+		"ResetMode":                "'Append' (default) | 'Replace'. Replace soft-deletes rows in TargetTable whose GUID didn't appear in the new run before completion — keeps cached views from accumulating orphans when source data churns.",
+		"Concurrency":              "Optional per-op override of the bulk-Upsert client-side parallelism. 0 / null = compiler default (5 for typed ops). Clamped to [1,5] in WriteRecords.",
+		"CompiledOperationHash":    "The UV-assigned hash of the most recently compiled-and-registered Operation graph for this OperationConfig. Reused on subsequent runs as long as CompiledOperationConfigHash still matches the live OperationConfiguration JSON.",
+		"CompiledOperationConfigHash": "SHA-1 of the canonical OperationConfiguration JSON used to produce CompiledOperationHash. Cache invalidator — when this no longer matches the live JSON, the bridge recompiles + re-registers.",
 		"ScopeHashIndex":           "UNIQUE index UX_OperationConfig_ScopeHash matches the partial index in init-platform-configs.sql by name. EnsureSchema uses CREATE [UNIQUE] INDEX IF NOT EXISTS, so re-creating against an already-bootstrapped DB is a no-op."
 	}
 }

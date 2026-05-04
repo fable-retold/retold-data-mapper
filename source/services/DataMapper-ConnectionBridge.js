@@ -842,13 +842,9 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			});
 
 		// PUT /mapper/dashboard/:id — update by primary key.
-		// Implementation note: meadow-endpoints' default surface does
-		// not expose PUT/PATCH on this beacon, so we read the existing
-		// record, soft-delete it, then insert a merged version. The
-		// (Scope, Hash) UNIQUE INDEX has WHERE Deleted=0, so the new
-		// row coexists with the soft-deleted one. The IDDashboardConfig
-		// changes — callers should re-fetch by Hash if they need the
-		// new ID.
+		// meadow-endpoints 4.0.19+ exposes PUT-by-id directly: the URL
+		// :IDRecord is authoritative and the row updates in place. No
+		// more soft-delete-then-insert dance, no more ID churn.
 		pOratorServiceServer.doPut(`${tmpRoutePrefix}/dashboard/:id`,
 			(pRequest, pResponse, fNext) =>
 			{
@@ -859,7 +855,9 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				}
 				let tmpBody = pRequest.body || {};
 
-				// Step 1 — fetch the existing record so we can merge.
+				// Fetch the existing record so we can merge unchanged
+				// fields. (PUT-by-id will replace the whole row, so we
+				// need to send back the fields the caller didn't touch.)
 				beaconRequestEx('configs-databeacon', 'GET',
 					'/1.0/platform-configs/DashboardConfig/' + tmpID, null,
 					(pReadErr, pExisting) =>
@@ -870,8 +868,8 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 							return _self._sendError(pResponse, 404, 'Dashboard ' + tmpID + ' not found', fNext);
 						}
 
-						// Merge body into existing — only Hash, Scope, Title, Layout are mutable.
 						let tmpMerged = {
+							IDDashboardConfig: tmpID,
 							Hash:   (tmpBody.Hash !== undefined) ? String(tmpBody.Hash) : pExisting.Hash,
 							Scope:  (tmpBody.Scope !== undefined) ? String(tmpBody.Scope || '') : (pExisting.Scope || ''),
 							Title:  (tmpBody.Title !== undefined) ? tmpBody.Title : pExisting.Title,
@@ -880,21 +878,13 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 								: pExisting.Layout
 						};
 
-						// Step 2 — soft-delete the existing row.
-						beaconRequestEx('configs-databeacon', 'DELETE',
-							'/1.0/platform-configs/DashboardConfig/' + tmpID, null,
-							(pDelErr) =>
+						beaconRequestEx('configs-databeacon', 'PUT',
+							'/1.0/platform-configs/DashboardConfig/' + tmpID, tmpMerged,
+							(pErr, pUpdated) =>
 							{
-								if (pDelErr) return _self._sendError(pResponse, 502, pDelErr.message || String(pDelErr), fNext);
-								// Step 3 — insert the merged version.
-								beaconRequestEx('configs-databeacon', 'POST',
-									'/1.0/platform-configs/DashboardConfig', tmpMerged,
-									(pInsErr, pInserted) =>
-									{
-										if (pInsErr) return _self._sendError(pResponse, 502, pInsErr.message || String(pInsErr), fNext);
-										pResponse.send({ Success: true, Dashboard: pInserted });
-										return fNext();
-									});
+								if (pErr) return _self._sendError(pResponse, 502, pErr.message || String(pErr), fNext);
+								pResponse.send({ Success: true, Dashboard: pUpdated });
+								return fNext();
 							});
 					});
 			});
@@ -1056,7 +1046,14 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					TargetTable:          tmpBody.TargetTable || '',
 					OperationConfiguration: (typeof tmpBody.OperationConfiguration === 'string')
 						? tmpBody.OperationConfiguration
-						: JSON.stringify(tmpBody.OperationConfiguration || {})
+						: JSON.stringify(tmpBody.OperationConfiguration || {}),
+					DependsOn:            (tmpBody.DependsOn !== undefined)
+						? (typeof tmpBody.DependsOn === 'string' ? tmpBody.DependsOn : JSON.stringify(tmpBody.DependsOn || []))
+						: '[]',
+					ResetMode:            (tmpBody.ResetMode === 'Replace') ? 'Replace' : 'Append',
+					Concurrency:          (tmpBody.Concurrency != null) ? Math.max(0, parseInt(tmpBody.Concurrency, 10) || 0) : 0
+					// CompiledOperationHash / CompiledOperationConfigHash are
+					// populated by the run-operation path, not by the user.
 				};
 
 				let fPersist = (pValidationWarning) =>
@@ -1074,6 +1071,11 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				};
 
 				if (tmpSkipValidation) return fPersist('Validation skipped via ?skipValidation=1.');
+
+				// Per-type configuration validation runs first (cheap, local).
+				let tmpCfgErr = _self._validateOperationConfiguration(tmpRecord);
+				if (tmpCfgErr) return _self._sendError(pResponse, 400, tmpCfgErr.message, fNext);
+
 				_self._validateAgainstTarget(tmpRecord, (pValidationErr, pWarning) =>
 				{
 					if (pValidationErr) return _self._sendError(pResponse, 400, pValidationErr.message, fNext);
@@ -1108,7 +1110,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						let tmpFields = ['Hash', 'Scope', 'Name', 'Description', 'OperationType',
 							'SourceBeaconName', 'SourceConnectionHash', 'SourceEntity',
 							'TargetBeaconName', 'TargetConnectionHash', 'TargetTable'];
-						let tmpMerged = {};
+						let tmpMerged = { IDOperationConfig: tmpID };
 						for (let i = 0; i < tmpFields.length; i++)
 						{
 							let tmpField = tmpFields[i];
@@ -1121,28 +1123,44 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 								? tmpBody.OperationConfiguration
 								: JSON.stringify(tmpBody.OperationConfiguration))
 							: pExisting.OperationConfiguration;
+						tmpMerged.DependsOn = (tmpBody.DependsOn !== undefined)
+							? (typeof tmpBody.DependsOn === 'string' ? tmpBody.DependsOn : JSON.stringify(tmpBody.DependsOn || []))
+							: (pExisting.DependsOn || '[]');
+						tmpMerged.ResetMode = (tmpBody.ResetMode !== undefined)
+							? ((tmpBody.ResetMode === 'Replace') ? 'Replace' : 'Append')
+							: (pExisting.ResetMode || 'Append');
+						tmpMerged.Concurrency = (tmpBody.Concurrency !== undefined)
+							? Math.max(0, parseInt(tmpBody.Concurrency, 10) || 0)
+							: (pExisting.Concurrency || 0);
+						// Compiled* are reset on edit so the next run
+						// recompiles (the cfg may have changed materially).
+						// They get re-populated by the run-operation path
+						// after a successful UV /Operation register.
+						tmpMerged.CompiledOperationHash = '';
+						tmpMerged.CompiledOperationConfigHash = '';
 
 						let fPersist = (pValidationWarning) =>
 						{
-							beaconRequestEx('configs-databeacon', 'DELETE',
-								'/1.0/platform-configs/OperationConfig/' + tmpID, null,
-								(pDelErr) =>
+							// PUT-by-id (meadow-endpoints 4.0.19+): URL ID is
+							// authoritative, row updates in place, primary key
+							// preserved. No more soft-delete-then-insert.
+							beaconRequestEx('configs-databeacon', 'PUT',
+								'/1.0/platform-configs/OperationConfig/' + tmpID, tmpMerged,
+								(pErr, pUpdated) =>
 								{
-									if (pDelErr) return _self._sendError(pResponse, 502, pDelErr.message || String(pDelErr), fNext);
-									beaconRequestEx('configs-databeacon', 'POST',
-										'/1.0/platform-configs/OperationConfig', tmpMerged,
-										(pInsErr, pInserted) =>
-										{
-											if (pInsErr) return _self._sendError(pResponse, 502, pInsErr.message || String(pInsErr), fNext);
-											let tmpResp = { Success: true, Operation: pInserted };
-											if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
-											pResponse.send(tmpResp);
-											return fNext();
-										});
+									if (pErr) return _self._sendError(pResponse, 502, pErr.message || String(pErr), fNext);
+									let tmpResp = { Success: true, Operation: pUpdated };
+									if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
+									pResponse.send(tmpResp);
+									return fNext();
 								});
 						};
 
 						if (tmpSkipValidation) return fPersist('Validation skipped via ?skipValidation=1.');
+
+						let tmpCfgErr = _self._validateOperationConfiguration(tmpMerged);
+						if (tmpCfgErr) return _self._sendError(pResponse, 400, tmpCfgErr.message, fNext);
+
 						_self._validateAgainstTarget(tmpMerged, (pValidationErr, pWarning) =>
 						{
 							if (pValidationErr) return _self._sendError(pResponse, 400, pValidationErr.message, fNext);
@@ -1283,6 +1301,47 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 							return _self._sendError(pResponse, 501, tmpDispatchErr, fNext);
 						}
 
+						// Graph caching: if the OperationConfiguration hash
+						// matches what we previously stored on the
+						// OperationConfig row, skip re-registering the
+						// graph on UV — just trigger the existing one.
+						// Saves a UV /Operation roundtrip per run and keeps
+						// UV's /Operation list from filling up with N copies
+						// of the same graph. Persistent now (meadow-endpoints
+						// 4.0.19 PUT-by-id makes per-row state durable
+						// across edits and restarts).
+						let tmpCfgHash = _self._hashOperationConfig(pOperation);
+						let tmpCacheHit = !!(pOperation.CompiledOperationConfigHash === tmpCfgHash
+							&& pOperation.CompiledOperationHash);
+
+						let fTrigger = (pUVHash, pCacheHit) =>
+						{
+							_self._request('POST', '/Operation/' + pUVHash + '/Trigger', {},
+								(pTrigErr, pManifest) =>
+								{
+									if (pTrigErr) return _self._sendError(pResponse, 502, 'UV /Trigger failed: ' + pTrigErr.message, fNext);
+									pResponse.send({
+										Success:        pManifest && (pManifest.Status === 'Complete'),
+										OperationHash:  pUVHash,
+										OperationName:  tmpGraph.Name,
+										OperationType:  pOperation.OperationType,
+										CacheHit:       !!pCacheHit,
+										RunHash:        pManifest && pManifest.RunHash,
+										Status:         pManifest && pManifest.Status,
+										ElapsedMs:      pManifest && pManifest.ElapsedMs,
+										TaskOutputs:    _self._summarizeTaskOutputs(pManifest && pManifest.TaskOutputs),
+										Errors:         pManifest && pManifest.Errors
+									});
+									return fNext();
+								});
+						};
+
+						if (tmpCacheHit)
+						{
+							// Reuse the cached UV graph hash — no /Operation POST.
+							return fTrigger(pOperation.CompiledOperationHash, true);
+						}
+
 						_self._request('POST', '/Operation', tmpGraph,
 							(pPostErr, pCreated) =>
 							{
@@ -1290,26 +1349,216 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 								let tmpHash = (pCreated && pCreated.Hash) || (tmpGraph && tmpGraph.Hash);
 								if (!tmpHash) return _self._sendError(pResponse, 502, 'UV /Operation returned no Hash', fNext);
 
-								_self._request('POST', '/Operation/' + tmpHash + '/Trigger', {},
-									(pTrigErr, pManifest) =>
+								// Persist the new compiled hash on the
+								// OperationConfig row so subsequent runs (and
+								// restarts) can cache-hit. PUT-by-id is now
+								// in-place; the IDOperationConfig stays
+								// stable across the update. Best-effort: if
+								// the persist fails we still trigger; the
+								// next run will just re-register.
+								let tmpUpdate = {
+									IDOperationConfig:           pOperation.IDOperationConfig,
+									CompiledOperationHash:       tmpHash,
+									CompiledOperationConfigHash: tmpCfgHash
+								};
+								beaconRequestEx('configs-databeacon', 'PUT',
+									'/1.0/platform-configs/OperationConfig/' + pOperation.IDOperationConfig, tmpUpdate,
+									(pPutErr) =>
 									{
-										if (pTrigErr) return _self._sendError(pResponse, 502, 'UV /Trigger failed: ' + pTrigErr.message, fNext);
-										pResponse.send({
-											Success:        pManifest && (pManifest.Status === 'Complete'),
-											OperationHash:  tmpHash,
-											OperationName:  tmpGraph.Name,
-											OperationType:  pOperation.OperationType,
-											RunHash:        pManifest && pManifest.RunHash,
-											Status:         pManifest && pManifest.Status,
-											ElapsedMs:      pManifest && pManifest.ElapsedMs,
-											TaskOutputs:    _self._summarizeTaskOutputs(pManifest && pManifest.TaskOutputs),
-											Errors:         pManifest && pManifest.Errors
-										});
-										return fNext();
+										if (pPutErr) _self.fable.log.warn('run-operation: cache-persist failed: ' + pPutErr.message + ' (next run will re-register)');
+										return fTrigger(tmpHash, false);
 									});
 							});
 					});
 			});
+
+			// POST /mapper/uv/run-chain/:idOrHash
+			//
+			// Walk the OperationConfig.DependsOn DAG starting from
+			// :idOrHash, run each operation in topological order (deepest
+			// dependencies first), halt on the first failure. Cycles →
+			// 400. The :idOrHash is interpreted as a numeric ID if
+			// parseable, otherwise as a Hash — Hash is friendlier for
+			// scripting since it's the user-chosen identifier.
+			pOratorServiceServer.doPost(`${tmpRoutePrefix}/uv/run-chain/:idOrHash`,
+				(pRequest, pResponse, fNext) =>
+				{
+					let tmpClient = _self._client();
+					if (!tmpClient) return _self._sendError(pResponse, 503, 'Not connected to an Ultravisor', fNext);
+					let tmpKey = String(pRequest.params.idOrHash || '');
+					if (!tmpKey) return _self._sendError(pResponse, 400, 'POST /mapper/uv/run-chain/:idOrHash requires a Hash or numeric ID', fNext);
+					let tmpAsInt = parseInt(tmpKey, 10);
+					let tmpIsId = String(tmpAsInt) === tmpKey;
+
+					// Pull the full operation set so we can resolve hashes →
+					// configs and walk DependsOn references.
+					beaconRequest('configs-databeacon', '/1.0/platform-configs/OperationConfigs/0/1000',
+						(pListErr, pListRows) =>
+						{
+							if (pListErr) return _self._sendError(pResponse, 502, pListErr.message || String(pListErr), fNext);
+							let tmpAll = (Array.isArray(pListRows) ? pListRows : []).filter((r) => !r.Deleted);
+							let tmpById = {};
+							let tmpByHash = {};
+							for (let i = 0; i < tmpAll.length; i++)
+							{
+								tmpById[tmpAll[i].IDOperationConfig]  = tmpAll[i];
+								tmpByHash[tmpAll[i].Hash]             = tmpAll[i];
+							}
+							let tmpStart = tmpIsId ? tmpById[tmpAsInt] : tmpByHash[tmpKey];
+							if (!tmpStart) return _self._sendError(pResponse, 404, 'Operation "' + tmpKey + '" not found (looked up by ' + (tmpIsId ? 'ID' : 'Hash') + ')', fNext);
+
+							// Topo sort: depth-first walk from :id, emitting
+							// each node only after its dependencies. Throws on
+							// cycle.
+							let tmpOrder = [];
+							let tmpVisiting = {};   // Hash → true while in current path
+							let tmpVisited  = {};   // Hash → true once emitted
+
+							let tmpCycle = null;
+							let fVisit = (pNode) =>
+							{
+								if (tmpCycle) return;
+								if (tmpVisited[pNode.Hash]) return;
+								if (tmpVisiting[pNode.Hash])
+								{
+									tmpCycle = pNode.Hash;
+									return;
+								}
+								tmpVisiting[pNode.Hash] = true;
+								let tmpDeps = [];
+								try { tmpDeps = JSON.parse(pNode.DependsOn || '[]') || []; } catch (e) { tmpDeps = []; }
+								for (let d = 0; d < tmpDeps.length; d++)
+								{
+									let tmpDepHash = String(tmpDeps[d]);
+									let tmpDep = tmpByHash[tmpDepHash];
+									if (!tmpDep)
+									{
+										tmpCycle = '(missing dependency: ' + tmpDepHash + ' from ' + pNode.Hash + ')';
+										return;
+									}
+									fVisit(tmpDep);
+								}
+								tmpVisiting[pNode.Hash] = false;
+								tmpVisited[pNode.Hash] = true;
+								tmpOrder.push(pNode);
+							};
+							fVisit(tmpStart);
+							if (tmpCycle)
+							{
+								return _self._sendError(pResponse, 400,
+									'Dependency cycle or missing dep detected at "' + tmpCycle + '" while resolving ' + tmpStart.Hash, fNext);
+							}
+
+							// Run each op sequentially via the existing
+							// run-operation endpoint logic. We re-enter our own
+							// REST surface to keep cache-write + ResetMode +
+							// validation behavior consistent.
+							let tmpResults = [];
+							let tmpIdx = 0;
+							let fRunNext = () =>
+							{
+								if (tmpIdx >= tmpOrder.length)
+								{
+									return pResponse.send({
+										Success:    tmpResults.every((r) => r && r.Status === 'Complete'),
+										ChainStart: tmpStart.Hash,
+										ChainOrder: tmpOrder.map((o) => o.Hash),
+										Results:    tmpResults
+									}) && fNext();
+								}
+								let tmpCurrent = tmpOrder[tmpIdx++];
+								// Inline the run-operation logic by issuing a
+								// loopback POST. Simplest path that picks up
+								// any future changes to that endpoint.
+								let tmpUrl = 'http://127.0.0.1:' + (_self._Owner && _self._Owner.options && _self._Owner.options.Port || 8395)
+									+ tmpRoutePrefix + '/uv/run-operation/' + tmpCurrent.IDOperationConfig;
+								require('http').request(tmpUrl,
+									{ method: 'POST', headers: { 'Content-Type': 'application/json' } },
+									(pRes) =>
+									{
+										let tmpChunks = [];
+										pRes.on('data', (c) => tmpChunks.push(c));
+										pRes.on('end', () =>
+										{
+											let tmpBodyStr = Buffer.concat(tmpChunks).toString();
+											let tmpRes = null;
+											try { tmpRes = JSON.parse(tmpBodyStr); } catch (e) { tmpRes = { Error: 'parse: ' + e.message, Body: tmpBodyStr }; }
+											tmpResults.push({
+												Hash:           tmpCurrent.Hash,
+												Name:           tmpCurrent.Name,
+												OperationType:  tmpCurrent.OperationType,
+												Status:         tmpRes && tmpRes.Status,
+												Success:        !!(tmpRes && tmpRes.Success),
+												CacheHit:       !!(tmpRes && tmpRes.CacheHit),
+												ElapsedMs:      tmpRes && tmpRes.ElapsedMs,
+												TaskOutputs:    tmpRes && tmpRes.TaskOutputs,
+												Error:          tmpRes && tmpRes.Error
+											});
+											// Halt on first failure.
+											if (!tmpRes || tmpRes.Error || tmpRes.Status !== 'Complete')
+											{
+												return pResponse.send({
+													Success:    false,
+													ChainStart: tmpStart.Hash,
+													ChainOrder: tmpOrder.map((o) => o.Hash),
+													HaltedAt:   tmpCurrent.Hash,
+													Results:    tmpResults
+												}) && fNext();
+											}
+											fRunNext();
+										});
+									}).on('error', (e) =>
+									{
+										tmpResults.push({ Hash: tmpCurrent.Hash, Error: e.message });
+										return pResponse.send({
+											Success:    false,
+											ChainStart: tmpStart.Hash,
+											HaltedAt:   tmpCurrent.Hash,
+											Results:    tmpResults
+										}) && fNext();
+									}).end();
+							};
+							fRunNext();
+						});
+				});
+
+			// POST /mapper/operation/:id/schedule
+			// Body: { Cron: '<cron expr>', Enabled: true|false }
+			//
+			// Pass-through to UV's /Schedule/Operation. The OperationConfig's
+			// CompiledOperationHash must be set (i.e. the op has been run at
+			// least once) — UV schedules by hash, not by config-id.
+			pOratorServiceServer.doPost(`${tmpRoutePrefix}/operation/:id/schedule`,
+				(pRequest, pResponse, fNext) =>
+				{
+					let tmpClient = _self._client();
+					if (!tmpClient) return _self._sendError(pResponse, 503, 'Not connected to an Ultravisor', fNext);
+					let tmpID = parseInt(pRequest.params.id, 10);
+					if (!tmpID) return _self._sendError(pResponse, 400, 'POST /mapper/operation/:id/schedule requires numeric ID', fNext);
+					let tmpBody = pRequest.body || {};
+					if (!tmpBody.Cron) return _self._sendError(pResponse, 400, 'Schedule body requires Cron (e.g. "0 */6 * * *").', fNext);
+
+					beaconRequestEx('configs-databeacon', 'GET',
+						'/1.0/platform-configs/OperationConfig/' + tmpID, null,
+						(pErr, pOp) =>
+						{
+							if (pErr) return _self._sendError(pResponse, 502, pErr.message, fNext);
+							if (!pOp || !pOp.IDOperationConfig) return _self._sendError(pResponse, 404, 'Operation ' + tmpID + ' not found', fNext);
+							if (!pOp.CompiledOperationHash)
+							{
+								return _self._sendError(pResponse, 409,
+									'Operation graph not yet registered with UV — run it once via /mapper/uv/run-operation/' + tmpID + ' before scheduling.', fNext);
+							}
+							_self._request('POST', '/Schedule/Operation',
+								{ OperationHash: pOp.CompiledOperationHash, Cron: tmpBody.Cron, Enabled: (tmpBody.Enabled !== false) },
+								(pSchedErr, pSchedRes) =>
+								{
+									if (pSchedErr) return _self._sendError(pResponse, 502, 'UV /Schedule/Operation failed: ' + pSchedErr.message, fNext);
+									pResponse.send({ Success: true, Hash: pOp.Hash, OperationHash: pOp.CompiledOperationHash, Schedule: pSchedRes });
+									return fNext();
+								});
+						});
+				});
 
 		// GET /mapper/uv/operations — list UV operations (scope-agnostic
 		// for now; UV's Operations don't have the same Scope concept
@@ -1585,9 +1834,15 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						TargetBeaconName: pOperation.TargetBeaconName || '',
 						ConnectionHash:   pOperation.TargetConnectionHash || '',
 						Entity:           tmpEntity,
-						// Typed ops opt into parallel write chunks (5-way pool).
+						GUIDName:         tmpGUIDName,
+						// Typed ops opt into parallel write chunks (5-way pool by
+						// default). OperationConfig.Concurrency overrides per-op.
 						// Mapping (the existing flow) stays at the default 1.
-						Concurrency:      5,
+						Concurrency:      Math.max(1, Math.min(5, pOperation.Concurrency || 5)),
+						// ResetMode tells WriteRecords to soft-delete orphan rows
+						// (existing GUIDs not in the new comprehension) after the
+						// upsert succeeds. Default 'Append' = no purge.
+						ResetMode:        (pOperation.ResetMode === 'Replace') ? 'Replace' : 'Append',
 						AffinityKey:      'data-mapper'
 					  }
 					},
@@ -1692,9 +1947,15 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						TargetBeaconName: pOperation.TargetBeaconName || '',
 						ConnectionHash:   pOperation.TargetConnectionHash || '',
 						Entity:           tmpEntity,
-						// Typed ops opt into parallel write chunks (5-way pool).
+						GUIDName:         tmpGUIDName,
+						// Typed ops opt into parallel write chunks (5-way pool by
+						// default). OperationConfig.Concurrency overrides per-op.
 						// Mapping (the existing flow) stays at the default 1.
-						Concurrency:      5,
+						Concurrency:      Math.max(1, Math.min(5, pOperation.Concurrency || 5)),
+						// ResetMode tells WriteRecords to soft-delete orphan rows
+						// (existing GUIDs not in the new comprehension) after the
+						// upsert succeeds. Default 'Append' = no purge.
+						ResetMode:        (pOperation.ResetMode === 'Replace') ? 'Replace' : 'Append',
 						AffinityKey:      'data-mapper'
 					  }
 					},
@@ -1794,9 +2055,15 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						TargetBeaconName: pOperation.TargetBeaconName || '',
 						ConnectionHash:   pOperation.TargetConnectionHash || '',
 						Entity:           tmpEntity,
-						// Typed ops opt into parallel write chunks (5-way pool).
+						GUIDName:         tmpGUIDName,
+						// Typed ops opt into parallel write chunks (5-way pool by
+						// default). OperationConfig.Concurrency overrides per-op.
 						// Mapping (the existing flow) stays at the default 1.
-						Concurrency:      5,
+						Concurrency:      Math.max(1, Math.min(5, pOperation.Concurrency || 5)),
+						// ResetMode tells WriteRecords to soft-delete orphan rows
+						// (existing GUIDs not in the new comprehension) after the
+						// upsert succeeds. Default 'Append' = no purge.
+						ResetMode:        (pOperation.ResetMode === 'Replace') ? 'Replace' : 'Append',
 						AffinityKey:      'data-mapper'
 					  }
 					},
@@ -1925,9 +2192,15 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						TargetBeaconName: pOperation.TargetBeaconName || '',
 						ConnectionHash:   pOperation.TargetConnectionHash || '',
 						Entity:           tmpEntity,
-						// Typed ops opt into parallel write chunks (5-way pool).
+						GUIDName:         tmpGUIDName,
+						// Typed ops opt into parallel write chunks (5-way pool by
+						// default). OperationConfig.Concurrency overrides per-op.
 						// Mapping (the existing flow) stays at the default 1.
-						Concurrency:      5,
+						Concurrency:      Math.max(1, Math.min(5, pOperation.Concurrency || 5)),
+						// ResetMode tells WriteRecords to soft-delete orphan rows
+						// (existing GUIDs not in the new comprehension) after the
+						// upsert succeeds. Default 'Append' = no purge.
+						ResetMode:        (pOperation.ResetMode === 'Replace') ? 'Replace' : 'Append',
 						AffinityKey:      'data-mapper'
 					  }
 					},
@@ -1954,6 +2227,167 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
 			}
 		};
+	}
+
+	/**
+	 * Per-type configuration validation. Catches the most common
+	 * misconfigurations *before* the operation hits UV, so users see
+	 * a 400 with a specific field message instead of a runtime crash
+	 * deep inside a beacon action.
+	 *
+	 * Returns null on success, an Error on failure.
+	 */
+	_validateOperationConfiguration(pOperation)
+	{
+		let tmpType = String(pOperation.OperationType || '').toLowerCase();
+		if (!tmpType) return new Error('OperationType is required.');
+
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string')
+		{
+			try { tmpCfg = JSON.parse(tmpCfg); }
+			catch (e) { return new Error('OperationConfiguration is not valid JSON: ' + e.message); }
+		}
+		if (!tmpCfg || typeof tmpCfg !== 'object')
+		{
+			return new Error('OperationConfiguration must be a JSON object.');
+		}
+
+		// Common: every type must declare an Entity (used as the
+		// comprehension key + GUID-column basis).
+		if (!tmpCfg.Entity)
+		{
+			return new Error('OperationConfiguration.Entity is required (target entity name).');
+		}
+
+		// Common: source/target plumbing.
+		let tmpMissing = [];
+		['SourceBeaconName', 'SourceConnectionHash', 'SourceEntity',
+		 'TargetBeaconName', 'TargetConnectionHash', 'TargetTable']
+			.forEach((f) => { if (!pOperation[f]) tmpMissing.push(f); });
+		if (tmpMissing.length > 0)
+		{
+			return new Error('Missing required source/target fields: ' + tmpMissing.join(', '));
+		}
+
+		// Type-specific:
+		switch (tmpType)
+		{
+			case 'extraction':
+				if (!tmpCfg.Projection || typeof tmpCfg.Projection !== 'object' || Object.keys(tmpCfg.Projection).length === 0)
+				{
+					return new Error('Extraction requires OperationConfiguration.Projection (non-empty object of {targetCol: "{~D:Record.sourceCol~}"}).');
+				}
+				break;
+
+			case 'aggregation':
+				if (!Array.isArray(tmpCfg.GroupBy) || tmpCfg.GroupBy.length === 0)
+				{
+					return new Error('Aggregation requires OperationConfiguration.GroupBy (non-empty array of source column names).');
+				}
+				if (!Array.isArray(tmpCfg.Aggregates) || tmpCfg.Aggregates.length === 0)
+				{
+					return new Error('Aggregation requires OperationConfiguration.Aggregates (non-empty array of {Source, Function: "Sum|Count|Mean|Min|Max", As}).');
+				}
+				for (let i = 0; i < tmpCfg.Aggregates.length; i++)
+				{
+					let tmpA = tmpCfg.Aggregates[i] || {};
+					let tmpFn = String(tmpA.Function || tmpA.Op || '').toLowerCase();
+					if (!['sum', 'count', 'mean', 'avg', 'average', 'min', 'max'].includes(tmpFn))
+					{
+						return new Error('Aggregates[' + i + '].Function must be one of Sum|Count|Mean|Min|Max (got "' + (tmpA.Function || tmpA.Op || '') + '").');
+					}
+					if (!tmpA.As) return new Error('Aggregates[' + i + '].As is required (target column name).');
+				}
+				break;
+
+			case 'histogram':
+				if (!tmpCfg.BucketColumn)
+				{
+					return new Error('Histogram requires OperationConfiguration.BucketColumn (source column to bucket).');
+				}
+				if (!['DateMonth', 'DateDay', 'DateYear', 'NumericRange'].includes(tmpCfg.BucketKind || 'DateMonth'))
+				{
+					return new Error('Histogram BucketKind must be DateMonth | DateDay | DateYear | NumericRange (got "' + tmpCfg.BucketKind + '").');
+				}
+				if (tmpCfg.BucketKind === 'NumericRange' && !(Number(tmpCfg.BucketSize) > 0))
+				{
+					return new Error('Histogram BucketSize must be > 0 when BucketKind=NumericRange.');
+				}
+				if (!Array.isArray(tmpCfg.Aggregates) || tmpCfg.Aggregates.length === 0)
+				{
+					return new Error('Histogram requires OperationConfiguration.Aggregates (non-empty array of {Source, Function, As}).');
+				}
+				break;
+
+			case 'intersection':
+				if (!tmpCfg.RelatedEntity)
+				{
+					return new Error('Intersection requires OperationConfiguration.RelatedEntity.');
+				}
+				if (!tmpCfg.JoinOn || !tmpCfg.JoinOn.SourceField || !tmpCfg.JoinOn.RelatedField)
+				{
+					return new Error('Intersection requires OperationConfiguration.JoinOn = { SourceField, RelatedField }.');
+				}
+				if (!tmpCfg.Projection || typeof tmpCfg.Projection !== 'object' || Object.keys(tmpCfg.Projection).length === 0)
+				{
+					return new Error('Intersection requires OperationConfiguration.Projection (non-empty {targetCol: "{~D:Record.field~}"}).');
+				}
+				if (Array.isArray(tmpCfg.OrderBy))
+				{
+					for (let i = 0; i < tmpCfg.OrderBy.length; i++)
+					{
+						if (!tmpCfg.OrderBy[i] || !tmpCfg.OrderBy[i].Field)
+						{
+							return new Error('OrderBy[' + i + '].Field is required.');
+						}
+						let tmpDir = String(tmpCfg.OrderBy[i].Direction || 'ASC').toUpperCase();
+						if (tmpDir !== 'ASC' && tmpDir !== 'DESC')
+						{
+							return new Error('OrderBy[' + i + '].Direction must be ASC or DESC.');
+						}
+					}
+				}
+				break;
+
+			default:
+				return new Error('Unknown OperationType "' + pOperation.OperationType + '". Expected Extraction | Aggregation | Histogram | Intersection.');
+		}
+		return null;
+	}
+
+	/**
+	 * Stable SHA-1 of a canonical JSON encoding of the OperationConfig
+	 * fields that materially affect the compiled UV graph. Used as the
+	 * cache key for graph reuse: when this matches the stored
+	 * CompiledOperationConfigHash, we trigger the existing UV operation
+	 * by hash instead of re-registering. Keeps UV's /Operation list
+	 * from filling up with N copies of the same graph.
+	 *
+	 * Doesn't include Description/Name/Scope (cosmetic) or DependsOn
+	 * (chain-level, not graph-level).
+	 */
+	_hashOperationConfig(pOperation)
+	{
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string')
+		{
+			try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; }
+		}
+		let tmpCanonical = JSON.stringify({
+			Hash:                 pOperation.Hash || '',
+			OperationType:        pOperation.OperationType || '',
+			SourceBeaconName:     pOperation.SourceBeaconName || '',
+			SourceConnectionHash: pOperation.SourceConnectionHash || '',
+			SourceEntity:         pOperation.SourceEntity || '',
+			TargetBeaconName:     pOperation.TargetBeaconName || '',
+			TargetConnectionHash: pOperation.TargetConnectionHash || '',
+			TargetTable:          pOperation.TargetTable || '',
+			ResetMode:            pOperation.ResetMode || 'Append',
+			Concurrency:          pOperation.Concurrency || 0,
+			OperationConfiguration: tmpCfg
+		});
+		return require('crypto').createHash('sha1').update(tmpCanonical).digest('hex');
 	}
 
 	/**
@@ -2109,6 +2543,8 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			if ('MatchedSourceCount'  in tmpVal) tmpRow.MatchedSourceCount  = tmpVal.MatchedSourceCount;
 			if ('UnmatchedSourceCount' in tmpVal) tmpRow.UnmatchedSourceCount = tmpVal.UnmatchedSourceCount;
 			if ('Written'             in tmpVal) tmpRow.Written             = tmpVal.Written;
+			if ('OrphansDeleted'      in tmpVal) tmpRow.OrphansDeleted      = tmpVal.OrphansDeleted;
+			if ('OrphanErrors'        in tmpVal) tmpRow.OrphanErrors        = tmpVal.OrphanErrors;
 			if ('ElapsedMs'           in tmpVal) tmpRow.ElapsedMs           = tmpVal.ElapsedMs;
 			if ('Errors'           in tmpVal)
 			{
