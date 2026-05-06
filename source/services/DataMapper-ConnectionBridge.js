@@ -12,11 +12,22 @@
  * @license MIT
  */
 const libFableServiceProviderBase = require('fable-serviceproviderbase');
+const libPath = require('path');
+const libFs = require('fs');
 
 const defaultConnectionBridgeOptions = (
 	{
 		RoutePrefix: '/mapper'
 	});
+
+// Configs-databeacon bootstrap defaults. The beacon name is fixed by
+// the bridge's REST handlers (they hardcode AffinityKey='configs-databeacon')
+// so anything else here would mismatch. The connection name is what
+// shows up as the URL slug in /1.0/<connection-slug>/<table>/... — the
+// existing handlers all reference 'platform-configs', so it's fixed too.
+const CONFIGS_BEACON_NAME = 'configs-databeacon';
+const CONFIGS_CONNECTION_NAME = 'platform-configs';
+const CONFIGS_SCHEMA_FILES = ['OperationConfigSchema.json', 'DashboardConfigSchema.json'];
 
 class DataMapperConnectionBridge extends libFableServiceProviderBase
 {
@@ -66,6 +77,288 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	{
 		pResponse.send(pStatus || 500, { Error: pMessage });
 		return fNext();
+	}
+
+	/**
+	 * Send an HTTP request to a beacon's local REST surface, proxied
+	 * through the UV mesh via the MeadowProxy capability. Same shape the
+	 * route handlers use; exposed as a method so the bootstrap can share
+	 * it without duplicating the dispatch envelope.
+	 */
+	_meadowProxyRequest(pBeaconName, pMethod, pPath, pBody, fCb)
+	{
+		this._dispatch(
+			{
+				Capability: 'MeadowProxy',
+				Action: 'Request',
+				Settings:
+				{
+					Method:     pMethod,
+					Path:       pPath,
+					Body:       (pBody === undefined || pBody === null) ? '' : (typeof pBody === 'string' ? pBody : JSON.stringify(pBody)),
+					RemoteUser: ''
+				},
+				AffinityKey: pBeaconName,
+				TimeoutMs:   30000
+			},
+			(pError, pResult) =>
+			{
+				if (pError) return fCb(pError);
+				let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
+				let tmpStatus = tmpOutputs.Status;
+				let tmpBody = tmpOutputs.Body;
+				if (typeof tmpStatus === 'number' && tmpStatus >= 400)
+				{
+					let tmpSnippet = (typeof tmpBody === 'string') ? tmpBody.slice(0, 200) : '';
+					return fCb(new Error('beacon ' + pBeaconName + ' returned ' + tmpStatus + ': ' + tmpSnippet));
+				}
+				if (typeof tmpBody === 'string' && tmpBody)
+				{
+					try { return fCb(null, JSON.parse(tmpBody)); }
+					catch (pErr) { return fCb(new Error('beacon ' + pBeaconName + ' returned non-JSON: ' + pErr.message)); }
+				}
+				return fCb(null, tmpBody);
+			});
+	}
+
+	/**
+	 * Idempotent self-bootstrap of the configs-databeacon. Ensures:
+	 *   1. A SQLite connection named "platform-configs" exists and is connected
+	 *   2. The OperationConfig + DashboardConfig tables exist with their
+	 *      dynamic REST endpoints enabled
+	 *
+	 * Called from Retold-DataMapper.connectUltravisor() after the UV client
+	 * has authenticated. Skipped silently if the configs-databeacon isn't
+	 * registered yet (mesh not fully up); the operator can re-trigger via
+	 * POST /mapper/admin/bootstrap-configs.
+	 *
+	 * Failures are LOGGED and surfaced to the callback but do not crash
+	 * startup — the data-mapper still serves /mapper/mappings (internal
+	 * SQLite) even if the configs-databeacon isn't reachable, and the
+	 * bootstrap can be retried by hand.
+	 */
+	bootstrapConfigsBeacon(fCallback)
+	{
+		let tmpSelf = this;
+		this.fable.log.info('DataMapper bootstrap: starting configs-databeacon provisioning...');
+
+		// List connections via the typed DataBeaconAccess capability — the
+		// MeadowProxy /beacon/* paths are correctly allowlist-blocked
+		// (those are databeacon-internal management routes, not customer
+		// data). This is the only way to enumerate connections via the mesh.
+		this._dispatch(
+			{
+				Capability: 'DataBeaconAccess',
+				Action:     'ListConnections',
+				Settings:   {},
+				AffinityKey: CONFIGS_BEACON_NAME,
+				TimeoutMs:   15000
+			},
+			(pListErr, pResult) =>
+			{
+				if (pListErr)
+				{
+					tmpSelf.fable.log.warn(`DataMapper bootstrap: list connections failed (${pListErr.message}). Will still try eager-registration in case data exists.`);
+					return tmpSelf._bootstrapEagerRegisterAll(fCallback);
+				}
+				let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
+				let tmpConnections = tmpOutputs.Connections || [];
+				let tmpExisting = tmpConnections.find((c) => c && c.Name === CONFIGS_CONNECTION_NAME);
+				if (tmpExisting && tmpExisting.IDBeaconConnection)
+				{
+					tmpSelf.fable.log.info(`DataMapper bootstrap: connection [${CONFIGS_CONNECTION_NAME}] already present (id=${tmpExisting.IDBeaconConnection}).`);
+					return tmpSelf._bootstrapEnsureSchemas(tmpExisting.IDBeaconConnection, (pSchemaErr) =>
+					{
+						// Schemas done (or failed warn-only); always proceed to
+						// eager-register so existing ops show in UV's /Operation.
+						return tmpSelf._bootstrapEagerRegisterAll(fCallback);
+					});
+				}
+
+				// No connection yet. Connection creation isn't currently a
+				// typed mesh capability (only ListConnections is exposed via
+				// DataBeaconAccess; DataBeaconManagement has Introspect /
+				// Enable / Disable / UpdateProxyConfig but no Create). The
+				// MeadowProxy /beacon/connection route is allowlist-blocked
+				// by design (databeacon-internal management). Surface a clear
+				// instruction and continue — eager-register will no-op until
+				// the connection + schemas exist.
+				tmpSelf.fable.log.warn(
+					`DataMapper bootstrap: connection [${CONFIGS_CONNECTION_NAME}] not found on configs-databeacon. ` +
+					`No typed mesh capability exists yet for creating connections — operator must create it manually via the configs-databeacon UI or REST: ` +
+					`POST http://<configs-databeacon>:8389/beacon/connection ` +
+					`{Name: "${CONFIGS_CONNECTION_NAME}", Type: "SQLite", Config: {SQLiteFilePath: "/app/data/platform-configs.sqlite"}, AutoConnect: true}, ` +
+					`then POST .../beacon/connection/<id>/connect, then POST /mapper/admin/bootstrap-configs to retry.`);
+				return tmpSelf._bootstrapEagerRegisterAll(fCallback);
+			});
+	}
+
+	/**
+	 * Walk every OperationConfig on configs-databeacon and ensure each is
+	 * registered as a UV Operation graph. Idempotent — _eagerRegisterOperationGraph
+	 * cache-hits when the compile hash already matches. Run on every
+	 * data-mapper startup so a UV restart (which clears its in-memory
+	 * /Operation registry) auto-recovers without operator intervention.
+	 */
+	_bootstrapEagerRegisterAll(fCallback)
+	{
+		let tmpSelf = this;
+		// Use the same MeadowProxy path the bridge's /mapper/operations
+		// reader uses — allowlisted, returns the OperationConfig rows.
+		this._meadowProxyRequest(CONFIGS_BEACON_NAME, 'GET',
+			'/1.0/platform-configs/OperationConfigs/0/1000', null,
+			(pErr, pRows) =>
+			{
+				if (pErr)
+				{
+					tmpSelf.fable.log.warn(`DataMapper bootstrap: skipping eager-register pass — ${pErr.message}. Existing operations will compile + register on first run instead.`);
+					return fCallback(null);
+				}
+				let tmpRows = Array.isArray(pRows) ? pRows.filter((r) => r && !r.Deleted) : [];
+				if (tmpRows.length === 0)
+				{
+					tmpSelf.fable.log.info('DataMapper bootstrap: no OperationConfigs to eager-register.');
+					return fCallback(null);
+				}
+				tmpSelf.fable.log.info(`DataMapper bootstrap: eager-registering ${tmpRows.length} OperationConfig${tmpRows.length === 1 ? '' : 's'} with UV...`);
+
+				let tmpIdx = 0;
+				let tmpRegistered = 0;
+				let tmpCacheHits = 0;
+				let tmpFailed = 0;
+				let fNext = () =>
+				{
+					if (tmpIdx >= tmpRows.length)
+					{
+						tmpSelf.fable.log.info(`DataMapper bootstrap: eager-register pass done. Registered ${tmpRegistered}, cache-hits ${tmpCacheHits}, failed ${tmpFailed}.`);
+						return fCallback(null);
+					}
+					let tmpRow = tmpRows[tmpIdx++];
+					tmpSelf._eagerRegisterOperationGraph(tmpRow, (pIgnored, pRes) =>
+					{
+						if (pRes && pRes.CacheHit) tmpCacheHits++;
+						else if (pRes && pRes.Compiled) tmpRegistered++;
+						else tmpFailed++;
+						return fNext();
+					});
+				};
+				fNext();
+			});
+	}
+
+	_bootstrapEnsureConnected(pIDBeaconConnection, fCallback)
+	{
+		let tmpSelf = this;
+		this._meadowProxyRequest(CONFIGS_BEACON_NAME, 'POST',
+			'/beacon/connection/' + pIDBeaconConnection + '/connect', null,
+			(pConnErr) =>
+			{
+				if (pConnErr)
+				{
+					// Already-connected returns success on the beacon side, but
+					// other failures here would block schema work — log + abort.
+					tmpSelf.fable.log.warn(`DataMapper bootstrap: connection activate failed: ${pConnErr.message}`);
+					return fCallback(pConnErr);
+				}
+				return tmpSelf._bootstrapEnsureSchemas(pIDBeaconConnection, fCallback);
+			});
+	}
+
+	_bootstrapEnsureSchemas(pIDBeaconConnection, fCallback)
+	{
+		let tmpSelf = this;
+		let tmpSchemaDir = libPath.resolve(__dirname, 'schemas');
+		let tmpQueue = CONFIGS_SCHEMA_FILES.slice();
+		let tmpReport = [];
+
+		let fNext = () =>
+		{
+			if (tmpQueue.length === 0)
+			{
+				tmpSelf.fable.log.info(`DataMapper bootstrap: configs-databeacon ready. Schemas: ${tmpReport.map((r) => r.SchemaName + (r.TablesCreated.length ? '(+' + r.TablesCreated.length + ')' : '')).join(', ')}.`);
+				return fCallback(null, tmpReport);
+			}
+			let tmpFile = tmpQueue.shift();
+			let tmpAbs = libPath.join(tmpSchemaDir, tmpFile);
+			let tmpSchema;
+			try { tmpSchema = JSON.parse(libFs.readFileSync(tmpAbs, 'utf8')); }
+			catch (pReadErr)
+			{
+				tmpSelf.fable.log.warn(`DataMapper bootstrap: cannot read ${tmpFile}: ${pReadErr.message}`);
+				return fNext();
+			}
+			tmpSelf._bootstrapEnsureOneSchema(pIDBeaconConnection, tmpSchema, (pErr, pResult) =>
+			{
+				if (pErr)
+				{
+					tmpSelf.fable.log.warn(`DataMapper bootstrap: ensure ${tmpSchema.SchemaName} failed: ${pErr.message}`);
+				}
+				else
+				{
+					tmpReport.push(pResult);
+				}
+				return fNext();
+			});
+		};
+		fNext();
+	}
+
+	_bootstrapEnsureOneSchema(pIDBeaconConnection, pSchema, fCallback)
+	{
+		let tmpSelf = this;
+		this._dispatch(
+			{
+				Capability: 'DataBeaconSchema',
+				Action:     'EnsureSchema',
+				Settings:
+				{
+					IDBeaconConnection: pIDBeaconConnection,
+					SchemaName:         pSchema.SchemaName,
+					SchemaJSON:         pSchema
+				},
+				AffinityKey: CONFIGS_BEACON_NAME,
+				TimeoutMs:   60000
+			},
+			(pErr, pResult) =>
+			{
+				if (pErr) return fCallback(pErr);
+				let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
+				let tmpCreated = Array.isArray(tmpOutputs.TablesCreated) ? tmpOutputs.TablesCreated.slice() : [];
+				let tmpResult = { SchemaName: pSchema.SchemaName, TablesCreated: tmpCreated };
+				if (tmpCreated.length === 0) return fCallback(null, tmpResult);
+
+				// Refresh introspection so the dynamic-endpoint manager
+				// picks up the new tables, then enable each so PUT /Upserts
+				// returns 200 instead of 405.
+				tmpSelf._dispatch(
+					{
+						Capability: 'DataBeaconManagement',
+						Action:     'Introspect',
+						Settings:   { IDBeaconConnection: pIDBeaconConnection },
+						AffinityKey: CONFIGS_BEACON_NAME,
+						TimeoutMs:   30000
+					},
+					(pIntErr) =>
+					{
+						if (pIntErr) return fCallback(null, tmpResult);
+						let tmpIdx = 0;
+						let fEnableNext = () =>
+						{
+							if (tmpIdx >= tmpCreated.length) return fCallback(null, tmpResult);
+							let tmpTable = tmpCreated[tmpIdx++];
+							tmpSelf._dispatch(
+								{
+									Capability: 'DataBeaconManagement',
+									Action:     'EnableEndpoint',
+									Settings:   { IDBeaconConnection: pIDBeaconConnection, TableName: tmpTable },
+									AffinityKey: CONFIGS_BEACON_NAME,
+									TimeoutMs:   15000
+								},
+								() => fEnableNext());
+						};
+						fEnableNext();
+					});
+			});
 	}
 
 	/**
@@ -358,6 +651,24 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 							});
 						return fNext();
 					});
+			});
+
+		// ── Configs-databeacon self-bootstrap (manual retrigger) ─
+		//
+		// POST /mapper/admin/bootstrap-configs
+		// Re-runs the same idempotent bootstrap that fires automatically
+		// after Ultravisor auth in Retold-DataMapper.connectUltravisor.
+		// Useful when the configs-databeacon wasn't reachable at startup
+		// (mesh wasn't up yet), or after wiping configs state by hand.
+		pOratorServiceServer.doPost(`${tmpRoutePrefix}/admin/bootstrap-configs`,
+			(pRequest, pResponse, fNext) =>
+			{
+				_self.bootstrapConfigsBeacon((pErr, pReport) =>
+				{
+					if (pErr) return _self._sendError(pResponse, 502, pErr.message || String(pErr), fNext);
+					pResponse.send({ Success: true, Report: pReport || [] });
+					return fNext();
+				});
 			});
 
 		// ── EnsureSchema admin pass-through ─────────────────────
@@ -1063,10 +1374,19 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						(pError, pResult) =>
 						{
 							if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
-							let tmpResp = { Success: true, Operation: pResult };
-							if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
-							pResponse.send(tmpResp);
-							return fNext();
+
+							// Eager-register the UV Operation graph so it shows
+							// up in UV's /Operation list before first run.
+							// Best-effort — failures here log but don't block
+							// the create response (run-operation will retry).
+							_self._eagerRegisterOperationGraph(pResult, (pIgnored, pRegResult) =>
+							{
+								let tmpResp = { Success: true, Operation: pResult };
+								if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
+								if (pRegResult) tmpResp.UVRegistration = pRegResult;
+								pResponse.send(tmpResp);
+								return fNext();
+							});
 						});
 				};
 
@@ -1149,10 +1469,20 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 								(pErr, pUpdated) =>
 								{
 									if (pErr) return _self._sendError(pResponse, 502, pErr.message || String(pErr), fNext);
-									let tmpResp = { Success: true, Operation: pUpdated };
-									if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
-									pResponse.send(tmpResp);
-									return fNext();
+
+									// Re-register the UV Operation graph so the
+									// edited config is reflected in UV's
+									// /Operation list before the next run. Cache
+									// keys were just cleared above, so this
+									// always recompiles. Best-effort.
+									_self._eagerRegisterOperationGraph(pUpdated || tmpMerged, (pIgnored, pRegResult) =>
+									{
+										let tmpResp = { Success: true, Operation: pUpdated };
+										if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
+										if (pRegResult) tmpResp.UVRegistration = pRegResult;
+										pResponse.send(tmpResp);
+										return fNext();
+									});
 								});
 						};
 
@@ -2385,6 +2715,77 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	 * Doesn't include Description/Name/Scope (cosmetic) or DependsOn
 	 * (chain-level, not graph-level).
 	 */
+	/**
+	 * Compile an OperationConfig into a UV Operation graph and register
+	 * it with UV. Mirrors the compile-then-POST path inside
+	 * /mapper/uv/run-operation/:id but stops short of triggering the run,
+	 * so seeded/edited operations show up in UV's /Operation list before
+	 * the operator's first click. Persists the compile cache hashes back
+	 * to the configs-databeacon row so the run-time path is a cache-hit.
+	 *
+	 * Best-effort: any failure (UV unreachable, compile error, persist
+	 * error) is caught and reported via the result envelope. Callers
+	 * proceed regardless — the next /mapper/uv/run-operation/:id call
+	 * falls back to compile-then-register.
+	 *
+	 * fCallback: (null, { Compiled, OperationHash?, CacheHit?, Reason? })
+	 */
+	_eagerRegisterOperationGraph(pOperation, fCallback)
+	{
+		let tmpClient = this._client();
+		if (!tmpClient)
+		{
+			return fCallback(null, { Compiled: false, Reason: 'Ultravisor client not connected' });
+		}
+		let tmpType = String(pOperation.OperationType || '').toLowerCase();
+		let tmpGraph;
+		try
+		{
+			switch (tmpType)
+			{
+				case 'extraction':   tmpGraph = this._compileExtractionToOperation(pOperation);   break;
+				case 'aggregation':  tmpGraph = this._compileAggregationToOperation(pOperation);  break;
+				case 'histogram':    tmpGraph = this._compileHistogramToOperation(pOperation);    break;
+				case 'intersection': tmpGraph = this._compileIntersectionToOperation(pOperation); break;
+				default:
+					return fCallback(null, { Compiled: false, Reason: 'Unsupported OperationType: ' + pOperation.OperationType });
+			}
+		}
+		catch (pErr)
+		{
+			return fCallback(null, { Compiled: false, Reason: 'Compile failed: ' + pErr.message });
+		}
+		let tmpCfgHash = this._hashOperationConfig(pOperation);
+		if (pOperation.CompiledOperationConfigHash === tmpCfgHash && pOperation.CompiledOperationHash)
+		{
+			return fCallback(null, { Compiled: false, OperationHash: pOperation.CompiledOperationHash, CacheHit: true });
+		}
+		let tmpSelf = this;
+		this._request('POST', '/Operation', tmpGraph, (pPostErr, pCreated) =>
+		{
+			if (pPostErr) return fCallback(null, { Compiled: false, Reason: 'UV /Operation failed: ' + pPostErr.message });
+			let tmpHash = (pCreated && pCreated.Hash) || (tmpGraph && tmpGraph.Hash);
+			if (!tmpHash) return fCallback(null, { Compiled: false, Reason: 'UV /Operation returned no Hash' });
+
+			let tmpUpdate =
+			{
+				IDOperationConfig:           pOperation.IDOperationConfig,
+				CompiledOperationHash:       tmpHash,
+				CompiledOperationConfigHash: tmpCfgHash
+			};
+			tmpSelf._meadowProxyRequest('configs-databeacon', 'PUT',
+				'/1.0/platform-configs/OperationConfig/' + pOperation.IDOperationConfig, tmpUpdate,
+				(pPutErr) =>
+				{
+					if (pPutErr)
+					{
+						tmpSelf.fable.log.warn('eager-register: cache-persist failed for ' + pOperation.Hash + ': ' + pPutErr.message);
+					}
+					return fCallback(null, { Compiled: true, OperationHash: tmpHash, CacheHit: false });
+				});
+		});
+	}
+
 	_hashOperationConfig(pOperation)
 	{
 		let tmpCfg = pOperation.OperationConfiguration || {};

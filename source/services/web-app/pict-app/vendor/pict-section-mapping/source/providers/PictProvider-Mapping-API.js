@@ -38,7 +38,11 @@ class MappingAPIProvider
 			}
 		}
 		catch (pErr) { /* opaque origin or disabled storage — fall through */ }
-		return '';
+		// First-load default: show everything. '' would have meant "global
+		// only", which silently hides scope-tagged seeds (e.g. the synth-
+		// demo bundle) from a fresh operator browsing the list. The picker
+		// can still narrow back down to '' or any specific scope.
+		return '*';
 	}
 
 	setScope(pScope)

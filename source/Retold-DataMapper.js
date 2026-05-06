@@ -509,6 +509,25 @@ class RetoldDataMapper extends libFableServiceProviderBase
 				}
 				this._UltravisorStatus = 'Connected';
 				this.fable.log.info(`DataMapper connected to Ultravisor at ${pURL} as [${tmpBeaconName}].`);
+
+				// Best-effort self-bootstrap of the configs-databeacon
+				// (platform-configs SQLite connection + OperationConfig /
+				// DashboardConfig tables). Idempotent and gated on the
+				// configs-databeacon being mesh-reachable; failures log
+				// and continue so the rest of the data-mapper still serves.
+				let tmpBridge = this.fable.DataMapperConnectionBridge;
+				if (tmpBridge && typeof tmpBridge.bootstrapConfigsBeacon === 'function')
+				{
+					tmpBridge.bootstrapConfigsBeacon((pBootErr) =>
+					{
+						if (pBootErr)
+						{
+							this.fable.log.warn(`DataMapper bootstrap deferred: ${pBootErr.message}. Retrigger via POST /mapper/admin/bootstrap-configs once configs-databeacon is reachable.`);
+						}
+						return fCallback(null);
+					});
+					return;
+				}
 				return fCallback(null);
 			});
 		});

@@ -288,9 +288,24 @@ class PictSectionMapping extends libPictView
 			{
 				let tmpScope = this._API.getScope();
 				this.pict.AppData.Mapping.LoadState = 'empty';
-				this.pict.AppData.Mapping.EmptyMessage = 'No mappings in '
-					+ (tmpScope === '' ? 'global scope' : ('scope "' + tmpScope + '"'))
-					+ '. Use scope=* to see all.';
+				if (tmpScope === '*')
+				{
+					this.pict.AppData.Mapping.EmptyMessage =
+						'No mappings yet across any scope. Click + New mapping above to create one, '
+						+ 'or run a seed harness (e.g. npm run seed-synth-demo) to plant a sample set.';
+				}
+				else if (tmpScope === '')
+				{
+					this.pict.AppData.Mapping.EmptyMessage =
+						'No mappings in global scope. Set scope to * to see scope-tagged mappings, '
+						+ 'or click + New mapping above.';
+				}
+				else
+				{
+					this.pict.AppData.Mapping.EmptyMessage =
+						'No mappings in scope "' + tmpScope + '". '
+						+ 'Set scope to * to see all scopes, or click + New mapping above.';
+				}
 			}
 			else
 			{

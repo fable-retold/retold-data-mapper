@@ -20,10 +20,10 @@ const TOOLBAR_TEMPLATE = /*html*/`
 	{~TS:Pict-Section-Mapping-Toolbar-BackLink:AppData.Mapping.BackLinkSlot~}
 	<span class="psm-toolbar-spacer"></span>
 	<label>scope
-		<input type="text" class="psm-scope-input" spellcheck="false" placeholder="(global)"
+		<input type="text" class="psm-scope-input" spellcheck="false" placeholder="* (all scopes)"
 			value="{~Data:AppData.Mapping.Scope~}"
 			oninput="_Pict.views['Pict-Section-Mapping'].onScopeInput(this.value)" />
-		<span class="psm-scope-hint">empty = global • * = all</span>
+		<span class="psm-scope-hint">* = all • empty = global • any string = that scope</span>
 	</label>
 	{~TS:Pict-Section-Mapping-Toolbar-NewButton:AppData.Mapping.NewButtonSlot~}
 </div>`;

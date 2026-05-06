@@ -6947,10 +6947,10 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
 	{~TS:Pict-Section-Mapping-Toolbar-BackLink:AppData.Mapping.BackLinkSlot~}
 	<span class="psm-toolbar-spacer"></span>
 	<label>scope
-		<input type="text" class="psm-scope-input" spellcheck="false" placeholder="(global)"
+		<input type="text" class="psm-scope-input" spellcheck="false" placeholder="* (all scopes)"
 			value="{~Data:AppData.Mapping.Scope~}"
 			oninput="_Pict.views['Pict-Section-Mapping'].onScopeInput(this.value)" />
-		<span class="psm-scope-hint">empty = global • * = all</span>
+		<span class="psm-scope-hint">* = all • empty = global • any string = that scope</span>
 	</label>
 	{~TS:Pict-Section-Mapping-Toolbar-NewButton:AppData.Mapping.NewButtonSlot~}
 </div>`;
@@ -7394,7 +7394,13 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
             if (tmpRows.length === 0) {
               let tmpScope = this._API.getScope();
               this.pict.AppData.Mapping.LoadState = 'empty';
-              this.pict.AppData.Mapping.EmptyMessage = 'No mappings in ' + (tmpScope === '' ? 'global scope' : 'scope "' + tmpScope + '"') + '. Use scope=* to see all.';
+              if (tmpScope === '*') {
+                this.pict.AppData.Mapping.EmptyMessage = 'No mappings yet across any scope. Click + New mapping above to create one, ' + 'or run a seed harness (e.g. npm run seed-synth-demo) to plant a sample set.';
+              } else if (tmpScope === '') {
+                this.pict.AppData.Mapping.EmptyMessage = 'No mappings in global scope. Set scope to * to see scope-tagged mappings, ' + 'or click + New mapping above.';
+              } else {
+                this.pict.AppData.Mapping.EmptyMessage = 'No mappings in scope "' + tmpScope + '". ' + 'Set scope to * to see all scopes, or click + New mapping above.';
+              }
             } else {
               this.pict.AppData.Mapping.LoadState = 'ready';
             }
@@ -7607,7 +7613,11 @@ table.psd-panel-table tr:hover td { background: var(--psd-border-soft); }
               if (tmpStored !== null) return tmpStored;
             }
           } catch (pErr) {/* opaque origin or disabled storage — fall through */}
-          return '';
+          // First-load default: show everything. '' would have meant "global
+          // only", which silently hides scope-tagged seeds (e.g. the synth-
+          // demo bundle) from a fresh operator browsing the list. The picker
+          // can still narrow back down to '' or any specific scope.
+          return '*';
         }
         setScope(pScope) {
           try {
