@@ -1,0 +1,59 @@
+{
+	"_comment": "DashboardConfig descriptor for operator-authored dashboards. Lives on the configs-databeacon, parallel to OperationConfig and the (internal-SQLite) MappingConfig. Materialized via DataBeaconSchema:EnsureSchema as part of the data-mapper's startup self-bootstrap. Columns derived from the bridge's POST /mapper/dashboards handler shape: { Hash, Scope, Title, Layout }.",
+
+	"SchemaName": "data-mapper-dashboards",
+	"Version": 1,
+
+	"Tables":
+	[
+		{
+			"Scope": "DashboardConfig",
+			"DefaultIdentifier": "IDDashboardConfig",
+			"Domain": "Default",
+			"_comment": "Stored panel layout. The dashboards-databeacon (or any consumer) reads these to render a UI without round-tripping through the data-mapper. Layout is JSON-encoded TEXT; the bridge parses it on read and stringifies on write.",
+			"Schema":
+			[
+				{ "Column": "IDDashboardConfig",     "Type": "AutoIdentity", "Size": "Default" },
+				{ "Column": "GUIDDashboardConfig",   "Type": "AutoGUID",     "Size": "36" },
+				{ "Column": "CreateDate",            "Type": "CreateDate",   "Size": "Default" },
+				{ "Column": "CreatingIDUser",        "Type": "CreateIDUser", "Size": "int" },
+				{ "Column": "UpdateDate",            "Type": "UpdateDate",   "Size": "Default" },
+				{ "Column": "UpdatingIDUser",        "Type": "UpdateIDUser", "Size": "int" },
+				{ "Column": "Deleted",               "Type": "Deleted",      "Size": "Default" },
+				{ "Column": "DeleteDate",            "Type": "DeleteDate",   "Size": "Default" },
+				{ "Column": "DeletingIDUser",        "Type": "DeleteIDUser", "Size": "int" },
+				{ "Column": "Hash",                  "Type": "String",       "Size": "200" },
+				{ "Column": "Scope",                 "Type": "String",       "Size": "200" },
+				{ "Column": "Title",                 "Type": "String",       "Size": "200" },
+				{ "Column": "Layout",                "Type": "String",       "Size": "Default" }
+			],
+			"DefaultObject":
+			{
+				"IDDashboardConfig": 0,
+				"GUIDDashboardConfig": "0x0000000000000000",
+				"CreateDate": null,
+				"CreatingIDUser": 0,
+				"UpdateDate": null,
+				"UpdatingIDUser": 0,
+				"Deleted": false,
+				"DeleteDate": null,
+				"DeletingIDUser": 0,
+				"Hash": "",
+				"Scope": "",
+				"Title": "",
+				"Layout": "{}"
+			},
+			"Indexes":
+			[
+				{ "Name": "UX_DashboardConfig_ScopeHash", "Columns": ["Scope", "Hash"], "Unique": true }
+			]
+		}
+	],
+
+	"_notes":
+	{
+		"Hash":   "Operator-supplied stable identifier; (Scope, Hash) is unique. Used by the dashboards-databeacon to look up a dashboard by short name rather than numeric ID.",
+		"Scope":  "Cross-cuts OperationConfig — same scope semantics. '' = global, any other value scopes the dashboard to that environment / tenant / demo.",
+		"Layout": "JSON-encoded panel descriptor. Shape lives in pict-section-dashboard's documentation; the bridge treats it as opaque TEXT."
+	}
+}
