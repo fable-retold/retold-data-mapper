@@ -175,21 +175,56 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					});
 				}
 
-				// No connection yet. Connection creation isn't currently a
-				// typed mesh capability (only ListConnections is exposed via
-				// DataBeaconAccess; DataBeaconManagement has Introspect /
-				// Enable / Disable / UpdateProxyConfig but no Create). The
-				// MeadowProxy /beacon/connection route is allowlist-blocked
-				// by design (databeacon-internal management). Surface a clear
-				// instruction and continue — eager-register will no-op until
-				// the connection + schemas exist.
-				tmpSelf.fable.log.warn(
-					`DataMapper bootstrap: connection [${CONFIGS_CONNECTION_NAME}] not found on configs-databeacon. ` +
-					`No typed mesh capability exists yet for creating connections — operator must create it manually via the configs-databeacon UI or REST: ` +
-					`POST http://<configs-databeacon>:8389/beacon/connection ` +
-					`{Name: "${CONFIGS_CONNECTION_NAME}", Type: "SQLite", Config: {SQLiteFilePath: "/app/data/platform-configs.sqlite"}, AutoConnect: true}, ` +
-					`then POST .../beacon/connection/<id>/connect, then POST /mapper/admin/bootstrap-configs to retry.`);
-				return tmpSelf._bootstrapEagerRegisterAll(fCallback);
+				// No connection yet — create via the typed
+				// DataBeaconManagement.CreateConnection capability (added in
+				// retold-databeacon 1.0.2). Idempotent: if it sneaked in
+				// between ListConnections and now, the handler returns the
+				// existing IDBeaconConnection. AutoConnect:true brings the
+				// runtime up + restores any flagged dynamic endpoints.
+				tmpSelf.fable.log.info(`DataMapper bootstrap: connection [${CONFIGS_CONNECTION_NAME}] not found — creating via DataBeaconManagement.CreateConnection.`);
+				tmpSelf._dispatch(
+					{
+						Capability: 'DataBeaconManagement',
+						Action:     'CreateConnection',
+						Settings:
+						{
+							Name:        CONFIGS_CONNECTION_NAME,
+							Type:        'SQLite',
+							Config:      { SQLiteFilePath: '/app/data/platform-configs.sqlite' },
+							AutoConnect: true,
+							Description: 'Auto-provisioned by retold-data-mapper. Hosts OperationConfig + DashboardConfig tables.'
+						},
+						AffinityKey: CONFIGS_BEACON_NAME,
+						TimeoutMs:   30000
+					},
+					(pCreateErr, pCreateRes) =>
+					{
+						if (pCreateErr)
+						{
+							// Likely a pre-1.0.2 databeacon image without the
+							// new capability. Fall back to the operator-action
+							// instructions; eager-register pass still runs.
+							tmpSelf.fable.log.warn(
+								`DataMapper bootstrap: CreateConnection dispatch failed (${pCreateErr.message}). ` +
+								`Likely an older databeacon image without the typed capability. ` +
+								`Operator can create it via: POST http://<configs-databeacon>:8389/beacon/connection ` +
+								`{Name: "${CONFIGS_CONNECTION_NAME}", Type: "SQLite", Config: {SQLiteFilePath: "/app/data/platform-configs.sqlite"}, AutoConnect: true}, ` +
+								`then POST /mapper/admin/bootstrap-configs.`);
+							return tmpSelf._bootstrapEagerRegisterAll(fCallback);
+						}
+						let tmpCreateOut = (pCreateRes && pCreateRes.Outputs) || pCreateRes || {};
+						let tmpNewID = tmpCreateOut.IDBeaconConnection;
+						if (!tmpNewID)
+						{
+							tmpSelf.fable.log.warn('DataMapper bootstrap: CreateConnection returned no IDBeaconConnection — skipping schema step.');
+							return tmpSelf._bootstrapEagerRegisterAll(fCallback);
+						}
+						tmpSelf.fable.log.info(`DataMapper bootstrap: created connection [${CONFIGS_CONNECTION_NAME}] (id=${tmpNewID}, created=${tmpCreateOut.Created}, connected=${tmpCreateOut.Connected}).`);
+						return tmpSelf._bootstrapEnsureSchemas(tmpNewID, () =>
+						{
+							return tmpSelf._bootstrapEagerRegisterAll(fCallback);
+						});
+					});
 			});
 	}
 
