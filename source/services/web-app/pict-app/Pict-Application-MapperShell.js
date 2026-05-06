@@ -62,12 +62,15 @@ class MapperShellApplication extends libPictApplication
 		// Three sections — each pointed at its own destination div within the layout.
 		// Same shared scope (read from localStorage) so the picker in the top-nav
 		// hits all of them at once.
+		// Section configs read DefaultDestinationAddress as the view-level
+		// destination; ContentDestinationAddress is a per-renderable concept
+		// and is a no-op at this level. Setting only the right key keeps
+		// the override surface honest.
 		this.pict.addView(
 			'Pict-Section-Mapping',
 			Object.assign({}, libSectionMapping.default_configuration,
 				{
 					DefaultDestinationAddress: '#MapperShell-Mappings',
-					ContentDestinationAddress: '#MapperShell-Mappings',
 					APIBaseUrl:                '/mapper',
 					Mode:                      'manage',
 					ShowToolbar:               false,    // shell owns the scope picker
@@ -80,7 +83,6 @@ class MapperShellApplication extends libPictApplication
 			Object.assign({}, libSectionOperation.default_configuration,
 				{
 					DefaultDestinationAddress: '#MapperShell-Operations',
-					ContentDestinationAddress: '#MapperShell-Operations',
 					APIBaseUrl:                '/mapper',
 					Mode:                      'manage',
 					ShowToolbar:               false,
@@ -92,7 +94,7 @@ class MapperShellApplication extends libPictApplication
 			'Pict-Section-Dashboard',
 			Object.assign({}, libSectionDashboard.default_configuration,
 				{
-					ContentDestinationAddress: '#MapperShell-Dashboards',
+					DefaultDestinationAddress: '#MapperShell-Dashboards',
 					APIBaseUrl:                '/mapper',
 					Mode:                      'manage',
 					ShowToolbar:               false,

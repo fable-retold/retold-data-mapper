@@ -28,7 +28,6 @@ class OperationShellApplication extends libPictApplication
 			'Pict-Section-Operation',
 			Object.assign({}, libSectionOperation.default_configuration,
 				{
-					ContentDestinationAddress: '#operation-section',
 					DefaultDestinationAddress: '#operation-section',
 					APIBaseUrl:                '/mapper',
 					Mode:                      'manage',

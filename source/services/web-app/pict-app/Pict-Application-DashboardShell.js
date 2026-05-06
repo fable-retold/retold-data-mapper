@@ -28,7 +28,7 @@ class DashboardShellApplication extends libPictApplication
 			'Dashboards',
 			Object.assign({}, libSectionDashboard.default_configuration,
 				{
-					ContentDestinationAddress: '#dashboard-section',
+					DefaultDestinationAddress: '#dashboard-section',
 					APIBaseUrl:                '/mapper',
 					Mode:                      'manage',
 					ShowToolbar:               true,

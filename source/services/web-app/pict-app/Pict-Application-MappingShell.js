@@ -24,7 +24,13 @@ class MappingShellApplication extends libPictApplication
 			'Mappings',
 			Object.assign({}, libSectionMapping.default_configuration,
 				{
-					ContentDestinationAddress: '#mapping-section',
+					// Section reads `DefaultDestinationAddress` (per its
+					// default config). Setting `ContentDestinationAddress`
+					// here was a quiet no-op — section kept mounting at its
+					// default `#Pict-Section-Mapping` element which the page
+					// HTML doesn't have, so the "Loading mappings…"
+					// placeholder in `#mapping-section` never got replaced.
+					DefaultDestinationAddress: '#mapping-section',
 					APIBaseUrl:                '/mapper',
 					Mode:                      'manage',
 					ShowToolbar:               true,

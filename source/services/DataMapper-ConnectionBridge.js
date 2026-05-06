@@ -255,29 +255,56 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					tmpSelf.fable.log.info('DataMapper bootstrap: no OperationConfigs to eager-register.');
 					return fCallback(null);
 				}
-				tmpSelf.fable.log.info(`DataMapper bootstrap: eager-registering ${tmpRows.length} OperationConfig${tmpRows.length === 1 ? '' : 's'} with UV...`);
 
-				let tmpIdx = 0;
-				let tmpRegistered = 0;
-				let tmpCacheHits = 0;
-				let tmpFailed = 0;
-				let fNext = () =>
+				// Probe UV's /Operation list. UV's registry is in-memory, so a
+				// UV restart wipes it without invalidating our per-row
+				// CompiledOperationHash cache. If UV doesn't currently know
+				// about a hash, force a re-register for that row instead of
+				// trusting the stale cache.
+				tmpSelf._request('GET', '/Operation', null, (pUVErr, pUVList) =>
 				{
-					if (tmpIdx >= tmpRows.length)
+					let tmpUVHashes = {};
+					if (!pUVErr && Array.isArray(pUVList))
 					{
-						tmpSelf.fable.log.info(`DataMapper bootstrap: eager-register pass done. Registered ${tmpRegistered}, cache-hits ${tmpCacheHits}, failed ${tmpFailed}.`);
-						return fCallback(null);
+						for (let i = 0; i < pUVList.length; i++)
+						{
+							if (pUVList[i] && pUVList[i].Hash) tmpUVHashes[pUVList[i].Hash] = true;
+						}
 					}
-					let tmpRow = tmpRows[tmpIdx++];
-					tmpSelf._eagerRegisterOperationGraph(tmpRow, (pIgnored, pRes) =>
+
+					tmpSelf.fable.log.info(`DataMapper bootstrap: eager-registering ${tmpRows.length} OperationConfig${tmpRows.length === 1 ? '' : 's'} with UV (UV currently knows ${Object.keys(tmpUVHashes).length} graph${Object.keys(tmpUVHashes).length === 1 ? '' : 's'})...`);
+
+					let tmpIdx = 0;
+					let tmpRegistered = 0;
+					let tmpCacheHits = 0;
+					let tmpFailed = 0;
+					let fNext = () =>
 					{
-						if (pRes && pRes.CacheHit) tmpCacheHits++;
-						else if (pRes && pRes.Compiled) tmpRegistered++;
-						else tmpFailed++;
-						return fNext();
-					});
-				};
-				fNext();
+						if (tmpIdx >= tmpRows.length)
+						{
+							tmpSelf.fable.log.info(`DataMapper bootstrap: eager-register pass done. Registered ${tmpRegistered}, cache-hits ${tmpCacheHits}, failed ${tmpFailed}.`);
+							return fCallback(null);
+						}
+						let tmpRow = tmpRows[tmpIdx++];
+						// Stale-cache invalidation: if our cached UV hash isn't
+						// in UV's current registry, clear the cache fields on
+						// this in-memory copy so _eagerRegisterOperationGraph
+						// treats it as a fresh compile + register.
+						if (tmpRow.CompiledOperationHash && !tmpUVHashes[tmpRow.CompiledOperationHash])
+						{
+							tmpRow.CompiledOperationHash = '';
+							tmpRow.CompiledOperationConfigHash = '';
+						}
+						tmpSelf._eagerRegisterOperationGraph(tmpRow, (pIgnored, pRes) =>
+						{
+							if (pRes && pRes.CacheHit) tmpCacheHits++;
+							else if (pRes && pRes.Compiled) tmpRegistered++;
+							else tmpFailed++;
+							return fNext();
+						});
+					};
+					fNext();
+				});
 			});
 	}
 
