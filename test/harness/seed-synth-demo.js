@@ -48,6 +48,20 @@ const SCOPE = process.env.SEED_SCOPE || 'synth-demo';
 const READY_RETRIES = parseInt(process.env.SEED_RETRIES || '60', 10);
 const READY_DELAY_MS = parseInt(process.env.SEED_DELAY_MS || '2000', 10);
 
+// Opt-in "click Run all (in order)" + "Run mappings" automation. The
+// preset-data-platform-synth-demo container sets both true so the demo
+// lands with rows in the destination tables on first launch; manual
+// `npm run seed-synth-demo` runs keep the old behavior (seed only, no
+// execution) unless the operator explicitly opts in.
+const AUTO_RUN_OPS      = String(process.env.SEED_AUTO_RUN_OPS      || '').toLowerCase() === 'true';
+const AUTO_RUN_MAPPINGS = String(process.env.SEED_AUTO_RUN_MAPPINGS || '').toLowerCase() === 'true';
+// Generous per-run cap. The orderlines clone (25K rows × Pull→Write
+// batches of 500) plus the typed-op intersections are the long pole;
+// observed at ~120s per 1K rows on a cold cache against the in-docker
+// UV, so a 25K clone can take 45+ min. 60 minutes is the upper bound
+// for an honest first run; bails fast if something wedges entirely.
+const AUTO_RUN_TIMEOUT_MS = parseInt(process.env.SEED_AUTO_RUN_TIMEOUT_MS || '3600000', 10);
+
 const SOURCE_BEACON = 'synth-databeacon';
 const SOURCE_CONNECTION = 'industrial-supply-v1';
 const LAKE_BEACON = 'lake-databeacon';
@@ -539,7 +553,7 @@ const DASHBOARDS =
 
 // ── HTTP helpers ────────────────────────────────────────────────────
 
-function request(pMethod, pPath, pBody)
+function request(pMethod, pPath, pBody, pTimeoutMs)
 {
 	let tmpUrl = libUrl.parse(MAPPER_BASE + pPath);
 	let tmpData = pBody ? JSON.stringify(pBody) : '';
@@ -568,6 +582,18 @@ function request(pMethod, pPath, pBody)
 				});
 			});
 		tmpReq.on('error', pReject);
+		// Auto-run run-chain / run-mapping calls can take minutes (the
+		// orderlines clone is the long pole). Node's http.request has no
+		// default socket timeout so an actually-wedged UV would hang the
+		// seeder until the container is killed — opt-in cap surfaces a
+		// clean error and lets the seeder fail loudly instead.
+		if (Number.isFinite(pTimeoutMs) && pTimeoutMs > 0)
+		{
+			tmpReq.setTimeout(pTimeoutMs, () =>
+			{
+				tmpReq.destroy(new Error('request timed out after ' + pTimeoutMs + 'ms: ' + pMethod + ' ' + pPath));
+			});
+		}
 		if (tmpData) tmpReq.write(tmpData);
 		tmpReq.end();
 	});
@@ -725,20 +751,165 @@ async function ensureTableSchema(pSchemaSpec)
 
 // ── Driver ──────────────────────────────────────────────────────────
 
+// ── Auto-run (opt-in via SEED_AUTO_RUN_OPS / SEED_AUTO_RUN_MAPPINGS) ──
+//
+// When the seeder is run as the synth-demo preset's init container we
+// want the user to land on the data-mapper with rows already in the
+// destination tables, not just empty schemas + "now click Run all".
+// These helpers walk the local CLONES/TYPED_OPS/MAPPINGS arrays in
+// dependency order, POST run-operation/run-mapping for each, and roll up
+// pass/fail. Hash → IDOperationConfig lookup goes through the
+// /mapper/operations list so 409-on-reseed (where the create response
+// doesn't carry the existing record) still produces an ID. Clones run
+// first, then typed ops — by then all clone targets are populated, so
+// each typed-op runs once instead of paying for run-chain's per-leaf
+// re-walk of shared clone dependencies.
+
+async function _loadOperationIdsByHash()
+{
+	let tmpRes = await request('GET', '/mapper/operations?scope=' + encodeURIComponent(SCOPE));
+	if (tmpRes.status !== 200)
+	{
+		throw new Error('GET /mapper/operations failed: HTTP ' + tmpRes.status + ' ' + JSON.stringify(tmpRes.body));
+	}
+	let tmpOut = {};
+	let tmpOps = (tmpRes.body && tmpRes.body.Operations) || [];
+	for (let i = 0; i < tmpOps.length; i++)
+	{
+		if (tmpOps[i] && tmpOps[i].Hash)
+		{
+			tmpOut[tmpOps[i].Hash] = tmpOps[i].IDOperationConfig;
+		}
+	}
+	return tmpOut;
+}
+
+async function _loadMappingsByName()
+{
+	let tmpRes = await request('GET', '/mapper/mappings?scope=' + encodeURIComponent(SCOPE));
+	if (tmpRes.status !== 200)
+	{
+		throw new Error('GET /mapper/mappings failed: HTTP ' + tmpRes.status + ' ' + JSON.stringify(tmpRes.body));
+	}
+	let tmpOut = {};
+	let tmpMaps = (tmpRes.body && tmpRes.body.Mappings) || [];
+	for (let i = 0; i < tmpMaps.length; i++)
+	{
+		if (tmpMaps[i] && tmpMaps[i].Name)
+		{
+			tmpOut[tmpMaps[i].Name] = tmpMaps[i].IDMappingConfig;
+		}
+	}
+	return tmpOut;
+}
+
+async function _runOne(pVerb, pId, pLabel)
+{
+	let tmpStart = Date.now();
+	let tmpPath = '/mapper/uv/' + pVerb + '/' + pId;
+	let tmpRes;
+	try
+	{
+		tmpRes = await request('POST', tmpPath, {}, AUTO_RUN_TIMEOUT_MS);
+	}
+	catch (pErr)
+	{
+		console.log('  ✗ ' + pLabel + ' — ' + pErr.message);
+		return { ok: false, label: pLabel, error: pErr.message };
+	}
+	let tmpElapsedMs = Date.now() - tmpStart;
+	let tmpBody = tmpRes.body || {};
+	let tmpOk = tmpRes.status >= 200 && tmpRes.status < 300
+		&& tmpBody.Success === true && !tmpBody.HasTaskErrors;
+	if (tmpOk)
+	{
+		// UV's Trigger response includes Status='Complete' for successful ops
+		// and ElapsedMs from UV's side; the seeder's tmpElapsedMs is the
+		// outer HTTP time which includes the data-mapper's compile step.
+		console.log('  ✓ ' + pLabel + ' (' + tmpElapsedMs + 'ms)');
+		return { ok: true, label: pLabel, elapsedMs: tmpElapsedMs };
+	}
+	let tmpReason = tmpBody.Error || (tmpBody.Errors && JSON.stringify(tmpBody.Errors).slice(0, 240))
+		|| (tmpBody.Status ? ('Status=' + tmpBody.Status) : ('HTTP ' + tmpRes.status));
+	console.log('  ✗ ' + pLabel + ' — ' + tmpReason);
+	return { ok: false, label: pLabel, error: tmpReason };
+}
+
+async function autoRunOperations()
+{
+	console.log('');
+	console.log('Auto-running ' + (CLONES.length + TYPED_OPS.length) + ' operation(s) (SEED_AUTO_RUN_OPS=true):');
+	let tmpIdsByHash = await _loadOperationIdsByHash();
+	let tmpFails = 0;
+
+	// Phase 1 — clones (no deps, populate the lake mirrors).
+	for (let i = 0; i < CLONES.length; i++)
+	{
+		let tmpHash = CLONES[i].Hash;
+		let tmpId = tmpIdsByHash[tmpHash];
+		if (!tmpId)
+		{
+			console.log('  ✗ ' + tmpHash + ' — no IDOperationConfig (was the seed step skipped?)');
+			tmpFails++;
+			continue;
+		}
+		let tmpRes = await _runOne('run-operation', tmpId, tmpHash);
+		if (!tmpRes.ok) tmpFails++;
+	}
+
+	// Phase 2 — typed ops (read from the populated mirrors).
+	for (let i = 0; i < TYPED_OPS.length; i++)
+	{
+		let tmpHash = TYPED_OPS[i].Hash;
+		let tmpId = tmpIdsByHash[tmpHash];
+		if (!tmpId)
+		{
+			console.log('  ✗ ' + tmpHash + ' — no IDOperationConfig');
+			tmpFails++;
+			continue;
+		}
+		let tmpRes = await _runOne('run-operation', tmpId, tmpHash);
+		if (!tmpRes.ok) tmpFails++;
+	}
+	return tmpFails;
+}
+
+async function autoRunMappings()
+{
+	console.log('');
+	console.log('Auto-running ' + MAPPINGS.length + ' mapping(s) (SEED_AUTO_RUN_MAPPINGS=true):');
+	let tmpIdsByName = await _loadMappingsByName();
+	let tmpFails = 0;
+	for (let i = 0; i < MAPPINGS.length; i++)
+	{
+		let tmpName = MAPPINGS[i].Name;
+		let tmpId = tmpIdsByName[tmpName];
+		if (!tmpId)
+		{
+			console.log('  ✗ ' + tmpName + ' — no IDMappingConfig');
+			tmpFails++;
+			continue;
+		}
+		let tmpRes = await _runOne('run-mapping', tmpId, tmpName);
+		if (!tmpRes.ok) tmpFails++;
+	}
+	return tmpFails;
+}
+
 async function postRecord(pPath, pPayload, pLabel)
 {
 	let tmpRes = await request('POST', pPath, pPayload);
 	if (tmpRes.status >= 200 && tmpRes.status < 300)
 	{
 		console.log('  ✓ ' + pLabel);
-		return { ok: true };
+		return { ok: true, body: tmpRes.body };
 	}
 	// Treat unique-hash collisions as success (idempotent re-seed).
 	let tmpMsg = (tmpRes.body && tmpRes.body.Error) || JSON.stringify(tmpRes.body || tmpRes.status);
 	if (tmpRes.status === 409 || /already exists|duplicate|UNIQUE/i.test(String(tmpMsg)))
 	{
 		console.log('  · ' + pLabel + ' (already present)');
-		return { ok: true };
+		return { ok: true, body: tmpRes.body, alreadyPresent: true };
 	}
 	console.log('  ✗ ' + pLabel + ' — HTTP ' + tmpRes.status + ': ' + tmpMsg);
 	return { ok: false, error: tmpMsg };
@@ -809,20 +980,60 @@ async function postRecord(pPath, pPayload, pLabel)
 		if (!tmpRes.ok) tmpFails++;
 	}
 
-	console.log('');
-	if (tmpFails === 0)
+	// Auto-run is intentionally separate from the seed-fail accounting:
+	// a seed failure should not silently skip execution, and a run failure
+	// after a clean seed shouldn't make the seed look broken in retrospect.
+	let tmpRunFails = 0;
+	if (tmpFails === 0 && AUTO_RUN_OPS)
 	{
-		console.log('✓ Seeded successfully. Open the mapper UI and:');
-		console.log('  1. Operations tab — set scope to "' + SCOPE + '" or "*"');
-		console.log('  2. Click "Run all (in order)" — clones run first, then typed-op transforms.');
-		console.log('  3. Mappings tab — one mapping (CustomerMirror → opdb CustomerSummary) is ready to Run after the clone completes.');
-		console.log('  4. Dashboards tab — open "Synth Demo — Operations Dashboard" once all clones + typed ops have run.');
+		try { tmpRunFails += await autoRunOperations(); }
+		catch (pErr)
+		{
+			console.error('  ✗ auto-run operations crashed: ' + pErr.message);
+			tmpRunFails++;
+		}
+	}
+	if (tmpFails === 0 && AUTO_RUN_MAPPINGS)
+	{
+		try { tmpRunFails += await autoRunMappings(); }
+		catch (pErr)
+		{
+			console.error('  ✗ auto-run mappings crashed: ' + pErr.message);
+			tmpRunFails++;
+		}
+	}
+
+	console.log('');
+	if (tmpFails === 0 && tmpRunFails === 0)
+	{
+		if (AUTO_RUN_OPS || AUTO_RUN_MAPPINGS)
+		{
+			console.log('✓ Seeded' + (AUTO_RUN_OPS ? ' + ran operations' : '')
+				+ (AUTO_RUN_MAPPINGS ? ' + ran mappings' : '') + ' successfully.');
+			console.log('  Open the mapper UI and:');
+			console.log('  1. Operations tab (scope "' + SCOPE + '" or "*") — rows should already be in the lake/dashboard tables.');
+			console.log('  2. Mappings tab — re-run if you want; the auto-run already pushed CustomerSummary into opdb.');
+			console.log('  3. Dashboards tab — "Synth Demo — Operations Dashboard" is ready to open.');
+		}
+		else
+		{
+			console.log('✓ Seeded successfully. Open the mapper UI and:');
+			console.log('  1. Operations tab — set scope to "' + SCOPE + '" or "*"');
+			console.log('  2. Click "Run all (in order)" — clones run first, then typed-op transforms.');
+			console.log('  3. Mappings tab — one mapping (CustomerMirror → opdb CustomerSummary) is ready to Run after the clone completes.');
+			console.log('  4. Dashboards tab — open "Synth Demo — Operations Dashboard" once all clones + typed ops have run.');
+		}
 		process.exit(0);
 	}
-	else
+	else if (tmpFails > 0)
 	{
 		console.error('✗ Seeded with ' + tmpFails + ' failure(s) — see output above.');
 		process.exit(1);
+	}
+	else
+	{
+		console.error('✗ Seed succeeded but auto-run had ' + tmpRunFails + ' failure(s) — see output above.');
+		process.exit(2);
 	}
 })().catch((pErr) =>
 {
