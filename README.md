@@ -1,8 +1,8 @@
 # retold-data-mapper
 
-> **[&#9654; Read the Retold-Data-Mapper Documentation](https://fable-retold.github.io/retold-data-mapper/)** &mdash; interactive docs with the full API reference.
+> **[Read the Retold-Data-Mapper Documentation](https://fable-retold.github.io/retold-data-mapper/)** - interactive docs with the full API reference.
 
-Cross-beacon schema mapping and data sync. Discovers remote databeacons on the Ultravisor mesh, introspects their schemas, validates a declarative field mapping config, and executes batch syncs — all without direct database access.
+Cross-beacon schema mapping and data sync. Discovers remote databeacons on the Ultravisor mesh, introspects their schemas, validates a declarative field mapping config, and executes batch syncs - all without direct database access.
 
 ## Quick start
 
@@ -33,19 +33,19 @@ npm run dev
 
 Then, in your browser:
 
-**Step 1 — Configure the source beacon** (http://localhost:18390/)
-1. Click **Connections** → **+ New Connection**
-2. Pick a DB type (MSSQL / PostgreSQL / MySQL / SQLite / …), fill in config
-3. Click **Test Connection** → **Save** → **Connect**
+**Step 1 - Configure the source beacon** (http://localhost:18390/)
+1. Click **Connections** -> **+ New Connection**
+2. Pick a DB type (MSSQL / PostgreSQL / MySQL / SQLite / ...), fill in config
+3. Click **Test Connection** -> **Save** -> **Connect**
 4. Click **Introspect** to discover tables
 5. For each table you want to read, click **Enable Endpoints**
-6. Note the **connection ID** (shown in the UI) and the **URL slug** of the connection name — e.g. a connection named `"Bookstore MSSQL"` becomes `bookstore-mssql`
+6. Note the **connection ID** (shown in the UI) and the **URL slug** of the connection name - e.g. a connection named `"Bookstore MSSQL"` becomes `bookstore-mssql`
 
-**Step 2 — Configure the target beacon** (http://localhost:18391/)
+**Step 2 - Configure the target beacon** (http://localhost:18391/)
 
-Same flow. Important: the target table(s) must already exist in the target database — the mapper does NOT create schema in v1. Create the table with whatever columns your mapping needs, then introspect and enable endpoints.
+Same flow. Important: the target table(s) must already exist in the target database - the mapper does NOT create schema in v1. Create the table with whatever columns your mapping needs, then introspect and enable endpoints.
 
-**Step 3 — Write a mapping config**
+**Step 3 - Write a mapping config**
 
 Copy [examples/bookstore-sync.json](examples/bookstore-sync.json) and edit. The key fields you MUST get right:
 
@@ -53,20 +53,20 @@ Copy [examples/bookstore-sync.json](examples/bookstore-sync.json) and edit. The 
 {
   "Ultravisor": { "URL": "http://localhost:18422", "UserName": "retold", "Password": "" },
   "Source": {
-    "BeaconName":         "source-beacon",          ← fixed, see dev-server output
-    "ConnectionHash":     "bookstore-mssql",        ← URL slug of your Source connection Name
-    "IDBeaconConnection": 1                          ← the numeric ID from the Source beacon UI
+    "BeaconName":         "source-beacon",          <- fixed, see dev-server output
+    "ConnectionHash":     "bookstore-mssql",        <- URL slug of your Source connection Name
+    "IDBeaconConnection": 1                          <- the numeric ID from the Source beacon UI
   },
   "Target": {
     "BeaconName":         "target-beacon",
     "ConnectionHash":     "analytics-pg",
     "IDBeaconConnection": 1
   },
-  "EntityMappings": [ /* SourceEntity → TargetEntity + field mappings */ ]
+  "EntityMappings": [ /* SourceEntity -> TargetEntity + field mappings */ ]
 }
 ```
 
-**Step 4 — Run the mapper** (in another terminal)
+**Step 4 - Run the mapper** (in another terminal)
 
 ```bash
 # Dry-run first: validates the config against the live introspected schemas
@@ -76,7 +76,7 @@ Copy [examples/bookstore-sync.json](examples/bookstore-sync.json) and edit. The 
 ./bin/retold-data-mapper.js --config my-mapping.json --run --verbose
 ```
 
-**Step 5 — Verify**: query your target DB directly, or hit the target beacon's endpoint:
+**Step 5 - Verify**: query your target DB directly, or hit the target beacon's endpoint:
 
 ```bash
 curl http://localhost:18391/1.0/<your-target-slug>/<YourEntityPlural>/0/10
@@ -88,7 +88,7 @@ Press **Ctrl-C** in the dev-server terminal to stop everything. The beacon SQLit
 
 1. **Both beacons using the same external DB engine type.** Meadow's DAL registers providers globally on the fable (e.g. `fable.MeadowSQLiteProvider`), so a beacon running internal SQLite metadata + an external SQLite for dynamic endpoints stomps on its own internal DAL. In practice: pick *different* engines for the two beacons' external connections (e.g. MSSQL source + PostgreSQL target), OR use a non-SQLite internal store.
 
-2. **Writes via dynamic endpoints.** The `meadow-endpoints` Create operation previously crashed on `this.DAL.jsonSchema` being undefined for dynamically-introspected DALs. Fixed upstream at [meadow-endpoints/source/endpoints/create/Meadow-Operation-Create.js:22](../../../meadow/meadow-endpoints/source/endpoints/create/Meadow-Operation-Create.js) with a null-guard; the same patch is applied in `node_modules/` here. `npm rebuild` or reinstall would lose the vendored copy — rerun `cp .../meadow-endpoints/source/endpoints/create/Meadow-Operation-Create.js node_modules/...` if needed, or publish the fix.
+2. **Writes via dynamic endpoints.** The `meadow-endpoints` Create operation previously crashed on `this.DAL.jsonSchema` being undefined for dynamically-introspected DALs. Fixed upstream at [meadow-endpoints/source/endpoints/create/Meadow-Operation-Create.js:22](../../../meadow/meadow-endpoints/source/endpoints/create/Meadow-Operation-Create.js) with a null-guard; the same patch is applied in `node_modules/` here. `npm rebuild` or reinstall would lose the vendored copy - rerun `cp .../meadow-endpoints/source/endpoints/create/Meadow-Operation-Create.js node_modules/...` if needed, or publish the fix.
 
 3. **Ultravisor routing.** `AffinityKey` is sticky-after-first-claim, not name-based routing. The dev-server pre-seeds bindings at boot so `source-beacon` / `target-beacon` actually land on the right beacon. In a production mesh with one beacon per role this isn't an issue.
 
@@ -106,7 +106,7 @@ npm test
 
 ### 2. Integration smoke test (no live infra)
 
-Exercises the full pipeline in dry-run mode — skips gracefully if the Ultravisor env isn't up:
+Exercises the full pipeline in dry-run mode - skips gracefully if the Ultravisor env isn't up:
 
 ```bash
 npx mocha test/DataMapper-Integration_tests.js -u tdd --exit
@@ -119,10 +119,10 @@ Boots an Ultravisor + two DataBeacons in-process, connects one to MSSQL (meadow-
 **Prerequisites:**
 
 ```bash
-# MSSQL: source — meadow's bookstore fixture on port 31433
+# MSSQL: source - meadow's bookstore fixture on port 31433
 cd ../../meadow/meadow && ./scripts/mssql-test-db.sh start
 
-# PostgreSQL: target — on port 35432 (from meadow-connection-mssql or meadow-harness)
+# PostgreSQL: target - on port 35432 (from meadow-connection-mssql or meadow-harness)
 docker ps | grep meadow-postgresql-test   # must be running
 
 # Pre-create the target table once (idempotent)
@@ -152,12 +152,12 @@ node test/integration-harness.js
   Batch at offset 0: 10 records
   Batch at offset 10: 10 records
 === Retold DataMapper: integration-test-sync ===
-  Book → MappedBook: 20 synced | 0 errors | 0 skipped (0.1s)
+  Book -> MappedBook: 20 synced | 0 errors | 0 skipped (0.1s)
 Total: 20 synced | 0 errors | 0 skipped
 ── Verification ──────────────────────────────────
 Target MappedBook records (via beacon HTTP): 20
 Sample: IDMappedBook=21, BookTitle="The Hunger Games", BookISBN=439023483, BookYear=2008
-✓ Integration test PASSED — data synced through the mesh.
+Integration test PASSED - data synced through the mesh.
   Source: MSSQL Book (bookstore@127.0.0.1:31433) via source-beacon
   Target: PostgreSQL MappedBook via target-beacon
   Transport: 20 records routed through Ultravisor:18422
@@ -180,7 +180,7 @@ docker exec meadow-postgresql-test psql -U postgres -d bookstore \
 | 4 | MSSQL source connection | `POST /beacon/connection` + introspect finds 6 bookstore tables |
 | 5 | PostgreSQL target connection | `POST /beacon/connection` + introspect finds MappedBook |
 | 6 | Mesh introspection (source) | `DataBeaconManagement:Introspect` dispatched via Ultravisor, full column details returned |
-| 7 | Mesh introspection (target) | Same but on the other beacon — proves routing isolation |
+| 7 | Mesh introspection (target) | Same but on the other beacon - proves routing isolation |
 | 8 | Validator | All 5 field mappings validate against live introspected schemas |
 | 9 | Dry run | Validation-only path completes cleanly |
 | 10 | Sync engine (paginated) | Book records read in 2 batches of 10 |
@@ -202,7 +202,7 @@ Two ecosystem issues surfaced while building the harness. Both have workarounds 
 ```
 retold-data-mapper (CLI)
 │
-├─ fable-ultravisor-client ────▶ Ultravisor (NOC)
+├─ fable-ultravisor-client ────- Ultravisor (NOC)
 │     │                                │
 │     │  DataBeaconManagement:Introspect (schemas + columns)
 │     │  MeadowProxy:Request GET       (paginated reads from source)
@@ -212,7 +212,7 @@ retold-data-mapper (CLI)
 │     └── AffinityKey: target-beacon ──┘── DataBeacon-B → PostgreSQL
 │
 ├─ Mapping config (JSON)
-│     SourceEntity.Fields.Source ──▶ TargetEntity.Fields.Target
+│     SourceEntity.Fields.Source ──- TargetEntity.Fields.Target
 │
 └─ CLI summary: "Synced 20 records | 0 errors | 0 skipped"
 ```
@@ -263,9 +263,9 @@ retold-data-mapper/
 }
 ```
 
-- **`SyncMode`** — `Upsert` (match by identity, update or create), `InsertOnly` (create all, skip duplicates), `Replace` (wipe + reinsert, v2).
-- **`IdentityMapping`** — how to match existing records on the target for Upsert.
-- **`Fields`** — explicit source → target mappings. Unmapped fields are ignored.
+- **`SyncMode`** - `Upsert` (match by identity, update or create), `InsertOnly` (create all, skip duplicates), `Replace` (wipe + reinsert, v2).
+- **`IdentityMapping`** - how to match existing records on the target for Upsert.
+- **`Fields`** - explicit source -> target mappings. Unmapped fields are ignored.
 
 ## License
 

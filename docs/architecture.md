@@ -65,7 +65,7 @@ On `initializeService` it:
 
 The folders `source/services/definitions/*.json`, `source/services/executors/*.js`, `source/services/DataMapper-TaskConfigs.js`, and `source/services/DataMapper-CardOverrides.js` describe Data Mapper task types as flow-editor cards for the Ultravisor's `TaskTypeRegistry`. In the shipped `serve` path these are **not** registered by the server itself; they are consumed by the in-repo development harness (`test/dev-server.js`, `test/harness/interactive.js`), which spins up an embedded Ultravisor and registers them directly. On a real mesh, the surface the Data Mapper advertises is the BeaconProvider's capabilities.
 
-## The Pull → Map → Comprehend → Write pipeline
+## The Pull -> Map -> Comprehend -> Write pipeline
 
 A saved mapping (a `MappingConfig` row) is compiled by `ConnectionBridge._compileMappingToOperation()` into a four-node Ultravisor operation graph. Each node is a beacon task type that resolves to one of the Data Mapper's own capability actions:
 

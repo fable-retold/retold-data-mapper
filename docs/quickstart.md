@@ -112,14 +112,14 @@ curl http://localhost:8395/mapper/beacons
 The end-to-end sync path is:
 
 1. **Create a mapping** -- `POST /mapper/mappings` with the source/target beacon names and connection hashes, the source and target entities, and a `MappingConfiguration` (see [Mapping Configuration](mapping-configuration.md)). The mapping is stored in the internal SQLite database and returns a numeric `IDMappingConfig`.
-2. **Run it** -- `POST /mapper/uv/run-mapping/:id`. The Data Mapper compiles the mapping into an Ultravisor operation graph (`Pull → Map → Comprehend → Write`), registers it on the Ultravisor, triggers it, and returns the run manifest summary.
+2. **Run it** -- `POST /mapper/uv/run-mapping/:id`. The Data Mapper compiles the mapping into an Ultravisor operation graph (`Pull -> Map -> Comprehend -> Write`), registers it on the Ultravisor, triggers it, and returns the run manifest summary.
 
 ```bash
 # Create a mapping (abbreviated body)
 curl -X POST http://localhost:8395/mapper/mappings \
 	-H "Content-Type: application/json" \
 	-d '{
-		"Name": "Demographics → City",
+		"Name": "Demographics -> City",
 		"SourceBeaconName": "demographics-beacon",
 		"SourceConnectionHash": "demographics",
 		"SourceEntity": "Demographics",

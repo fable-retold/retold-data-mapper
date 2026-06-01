@@ -4,7 +4,7 @@ When the Data Mapper connects to an Ultravisor, it registers as a beacon and adv
 
 The Data Mapper registers **three capabilities**: `DataMapperSource`, `DataMapperRecords`, and `DataMapperTransform`.
 
-> Note: the provider logs "3 capabilities … with 9 actions" on startup, but the registered action set has grown to eleven (the streaming `CloneStream` and `AggregateStream` actions were added under `DataMapperRecords` after that log message was written). The actions documented below are the ones present in the code.
+> Note: the provider logs "3 capabilities ... with 9 actions" on startup, but the registered action set has grown to eleven (the streaming `CloneStream` and `AggregateStream` actions were added under `DataMapperRecords` after that log message was written). The actions documented below are the ones present in the code.
 
 ## DataMapperSource
 
@@ -50,13 +50,13 @@ Push a comprehension (or a bare records array) to a target entity using meadow-e
 | `Comprehension` | Object | no | Preferred input: `{ Entity: { GUID: record } }` (flows from `BuildComprehension`). |
 | `Records` | Array | no | Back-compat bare records array, wrapped into a single-entity comprehension. |
 | `BulkChunkSize` | Number | no | Records per bulk `Upserts` call (default 500). |
-| `Concurrency` | Number | no | Bulk-upsert chunks in flight (default 1, clamped to 1–5). |
+| `Concurrency` | Number | no | Bulk-upsert chunks in flight (default 1, clamped to 1-5). |
 | `ResetMode` | String | no | `Append` (default) or `Replace`. `Replace` soft-deletes target rows whose GUID is absent from the new comprehension. |
 | `GUIDName` | String | no | GUID column used by `ResetMode=Replace` orphan detection. |
 
 ### CloneStream
 
-A streaming pull-batch → write-batch clone. Instead of holding the whole source in memory, it loops a read+write pair so working memory stays at one batch. Use it for 1:1 mirrors with no cross-record logic; the destination's GUID upsert key handles deduplication. (Used by the `PassthroughClone` operation type.)
+A streaming pull-batch -> write-batch clone. Instead of holding the whole source in memory, it loops a read+write pair so working memory stays at one batch. Use it for 1:1 mirrors with no cross-record logic; the destination's GUID upsert key handles deduplication. (Used by the `PassthroughClone` operation type.)
 
 ### AggregateStream
 
@@ -105,7 +105,7 @@ Each takes its type-specific options bundled inside a single `OperationConfigura
 The field-mapping pipeline chains three of these actions plus a source read and a target write:
 
 ```
-PullRecords  →  MapRecords  →  BuildComprehension  →  WriteRecords
+PullRecords  ->  MapRecords  ->  BuildComprehension  ->  WriteRecords
 ```
 
 The typed operations reuse the same shape, swapping `MapRecords` for the matching transform action. Because the Data Mapper is both the orchestrator (it triggers the operation) and the executor (its beacon answers each node), a single mapping turns into one self-contained mesh operation. See [Architecture](architecture.md) for the full graph and how data flows between nodes on the Ultravisor's `State` edges.

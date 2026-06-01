@@ -9,7 +9,7 @@ Its job is to take records from one beacon entity, transform them with a declara
 When you save a mapping in the Data Mapper, it records which source beacon and entity to read from, which target beacon and entity to write to, and a `MappingConfiguration` describing how source fields become target fields. To run the sync, the Data Mapper **compiles** that mapping into an Ultravisor operation graph and triggers it. The graph's nodes call back into the Data Mapper's own beacon capabilities to pull, map, comprehend, and write the records:
 
 ```
-Pull → Map → Comprehend → Write
+Pull -> Map -> Comprehend -> Write
 ```
 
 Because the Data Mapper is itself a beacon, those four steps run as ordinary mesh work items. The source read and the target write are dispatched onward to the relevant databeacons, so the Data Mapper never needs network access to the underlying databases.
@@ -51,7 +51,7 @@ This is an actively evolving module. Here is an honest breakdown of what ships t
 ## Documentation
 
 - [Quick Start](quickstart.md) -- install, initialize, serve, and connect to the mesh.
-- [Architecture](architecture.md) -- the beacon-server model, the services, and the Pull → Map → Comprehend → Write pipeline.
+- [Architecture](architecture.md) -- the beacon-server model, the services, and the Pull -> Map -> Comprehend -> Write pipeline.
 - [REST API](rest-api.md) -- the routes the server mounts under `/mapper/*`.
 - [Beacon Capabilities](beacon-capabilities.md) -- the capabilities and actions advertised on the mesh.
 - [Mapping Configuration](mapping-configuration.md) -- the mapping format the compiler consumes.

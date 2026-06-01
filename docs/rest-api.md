@@ -57,7 +57,7 @@ These are the routes that actually move data. Each compiles the stored intent in
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| `POST` | `/mapper/uv/run-mapping/:id` | Compile a `MappingConfig` into the `Pull → Map → Comprehend → Write` graph, register, trigger, and return the run manifest summary. |
+| `POST` | `/mapper/uv/run-mapping/:id` | Compile a `MappingConfig` into the `Pull -> Map -> Comprehend -> Write` graph, register, trigger, and return the run manifest summary. |
 | `POST` | `/mapper/uv/run-operation/:id` | Compile an `OperationConfig` by its `OperationType` (Extraction, PassthroughClone, Aggregation, SQLAggregate, Histogram, Intersection, SQLJoin), register (or reuse a cached graph), trigger, and return the summary. |
 | `POST` | `/mapper/uv/run-chain/:idOrHash` | Walk an operation's `DependsOn` DAG and run each operation in topological order, halting on the first failure. Cycles return `400`. The identifier is treated as a numeric ID if parseable, otherwise as a hash. |
 | `POST` | `/mapper/operation/:id/schedule` | Register a cron schedule for an operation on the Ultravisor. Body: `{ Cron, Enabled? }`. Requires the operation to have been run once (so a compiled graph hash exists), otherwise returns `409`. |
@@ -67,9 +67,9 @@ The success response from a run is shaped like:
 ```json
 {
 	"Success": true,
-	"OperationHash": "…",
-	"OperationName": "Demographics → City",
-	"RunHash": "…",
+	"OperationHash": "...",
+	"OperationName": "Demographics -> City",
+	"RunHash": "...",
 	"Status": "Complete",
 	"ElapsedMs": 1234,
 	"TaskOutputs": { },

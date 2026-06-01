@@ -8,7 +8,7 @@ A `MappingConfiguration` is one field on a stored `MappingConfig` row. The row a
 
 ```json
 {
-	"Name": "Demographics → City",
+	"Name": "Demographics -> City",
 	"SourceBeaconName": "demographics-beacon",
 	"SourceConnectionHash": "demographics",
 	"SourceEntity": "Demographics",
