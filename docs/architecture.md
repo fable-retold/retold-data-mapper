@@ -4,33 +4,8 @@ The Data Mapper is a beacon-server: a single long-running process that combines 
 
 ## The beacon-server model
 
-```mermaid
-graph TD
-	subgraph DataMapper["Retold Data Mapper process"]
-		Orator["Orator HTTP server<br/>(restify)"]
-		WebUI["Static web UI<br/>(orator-static-server)"]
-		REST["REST API /mapper/*<br/>(ConnectionBridge)"]
-		SQLite["Internal SQLite<br/>(MappingConfig, OperationTemplate)"]
-		Beacon["Ultravisor beacon<br/>(ultravisor-beacon)"]
-		Client["Mesh dispatch client<br/>(fable-ultravisor-client)"]
-	end
-
-	Browser["Browser / API client"] --> Orator
-	Orator --> WebUI
-	Orator --> REST
-	REST --> SQLite
-	REST --> Client
-
-	UV["Ultravisor"]
-	Beacon -- "registers capabilities" --> UV
-	Client -- "POST /Operation + /Trigger" --> UV
-	UV -- "dispatches DataMapper capability work items" --> Beacon
-
-	SourceBeacon["Source databeacon"]
-	TargetBeacon["Target databeacon"]
-	UV -- "DataBeaconAccess / MeadowProxy" --> SourceBeacon
-	UV -- "MeadowProxy Upserts" --> TargetBeacon
-```
+<!-- bespoke diagram: edit diagrams/the-beacon-server-model.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper/docs -->
+![The beacon-server model](diagrams/the-beacon-server-model.svg)
 
 The process plays two roles at once. As a **server**, it answers REST and web-UI requests on its own port. As a **beacon**, it registers capabilities on the Ultravisor and answers work items dispatched to it. The interesting part is that a sync uses both roles in sequence: a REST call compiles and triggers an operation, and the operation's nodes come back to the Data Mapper as beacon work items.
 
@@ -69,14 +44,8 @@ The folders `source/services/definitions/*.json`, `source/services/executors/*.j
 
 A saved mapping (a `MappingConfig` row) is compiled by `ConnectionBridge._compileMappingToOperation()` into a four-node Ultravisor operation graph. Each node is a beacon task type that resolves to one of the Data Mapper's own capability actions:
 
-```mermaid
-graph LR
-	Start["Start"] --> Pull["Pull<br/>DataMapperRecords:PullRecords"]
-	Pull -- "State: Records[]" --> Map["Map<br/>DataMapperTransform:MapRecords"]
-	Map -- "State: Records[]" --> Comp["Comprehend<br/>DataMapperTransform:BuildComprehension"]
-	Comp -- "State: Comprehension{}" --> Write["Write<br/>DataMapperRecords:WriteRecords"]
-	Write --> End["End"]
-```
+<!-- bespoke diagram: edit diagrams/the-pull-map-comprehend-write-pipeline.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper/docs -->
+![The Pull -> Map -> Comprehend -> Write pipeline](diagrams/the-pull-map-comprehend-write-pipeline.svg)
 
 1. **Pull** -- `PullRecords` reads the source entity in pages from the source beacon (via `DataBeaconAccess`/`MeadowProxy`), with stable ordering for deterministic pagination.
 2. **Map** -- `MapRecords` applies the `MappingConfiguration` to each record. When running under a full Pict instance it uses meadow-integration's `TabularTransform` to resolve template expressions like `{~D:Record.Field~}`; otherwise it falls back to a lightweight regex mapper.

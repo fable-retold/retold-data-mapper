@@ -1,0 +1,6 @@
+graph LR
+	Start["Start"] --> Pull["Pull<br/>DataMapperRecords:PullRecords"]
+	Pull -- "State: Records[]" --> Map["Map<br/>DataMapperTransform:MapRecords"]
+	Map -- "State: Records[]" --> Comp["Comprehend<br/>DataMapperTransform:BuildComprehension"]
+	Comp -- "State: Comprehension{}" --> Write["Write<br/>DataMapperRecords:WriteRecords"]
+	Write --> End["End"]

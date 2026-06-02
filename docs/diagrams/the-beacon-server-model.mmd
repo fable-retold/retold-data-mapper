@@ -1,0 +1,25 @@
+graph TD
+	subgraph DataMapper["Retold Data Mapper process"]
+		Orator["Orator HTTP server<br/>(restify)"]
+		WebUI["Static web UI<br/>(orator-static-server)"]
+		REST["REST API /mapper/*<br/>(ConnectionBridge)"]
+		SQLite["Internal SQLite<br/>(MappingConfig, OperationTemplate)"]
+		Beacon["Ultravisor beacon<br/>(ultravisor-beacon)"]
+		Client["Mesh dispatch client<br/>(fable-ultravisor-client)"]
+	end
+
+	Browser["Browser / API client"] --> Orator
+	Orator --> WebUI
+	Orator --> REST
+	REST --> SQLite
+	REST --> Client
+
+	UV["Ultravisor"]
+	Beacon -- "registers capabilities" --> UV
+	Client -- "POST /Operation + /Trigger" --> UV
+	UV -- "dispatches DataMapper capability work items" --> Beacon
+
+	SourceBeacon["Source databeacon"]
+	TargetBeacon["Target databeacon"]
+	UV -- "DataBeaconAccess / MeadowProxy" --> SourceBeacon
+	UV -- "MeadowProxy Upserts" --> TargetBeacon
