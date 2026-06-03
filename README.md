@@ -199,45 +199,15 @@ Two ecosystem issues surfaced while building the harness. Both have workarounds 
 
 ## Architecture
 
-```
-retold-data-mapper (CLI)
-│
-├─ fable-ultravisor-client ────- Ultravisor (NOC)
-│     │                                │
-│     │  DataBeaconManagement:Introspect (schemas + columns)
-│     │  MeadowProxy:Request GET       (paginated reads from source)
-│     │  MeadowProxy:Request POST/PUT  (writes to target)
-│     │                                │
-│     ├── AffinityKey: source-beacon ──┤── DataBeacon-A → MSSQL
-│     └── AffinityKey: target-beacon ──┘── DataBeacon-B → PostgreSQL
-│
-├─ Mapping config (JSON)
-│     SourceEntity.Fields.Source ──- TargetEntity.Fields.Target
-│
-└─ CLI summary: "Synced 20 records | 0 errors | 0 skipped"
-```
+<!-- bespoke diagram: edit diagrams/architecture.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper -->
+![Architecture](diagrams/architecture.svg)
 
 The mapper never touches a database directly. All CRUD is relayed through `MeadowProxy:Request` work items over the Ultravisor mesh.
 
 ## Module layout
 
-```
-retold-data-mapper/
-├── bin/retold-data-mapper.js           ← CLI entry
-├── source/
-│   ├── Retold-DataMapper.js            ← Main fable service
-│   └── services/
-│       ├── DataMapper-Discovery.js     ← Mesh introspection + cache
-│       ├── DataMapper-Validator.js     ← Config ↔ schema validation
-│       ├── DataMapper-SyncEngine.js    ← Read/transform/write loop
-│       └── DataMapper-Reporter.js      ← Per-entity stats + summary
-├── test/
-│   ├── DataMapper_tests.js             ← 20 unit tests (mocked mesh)
-│   ├── DataMapper-Integration_tests.js ← Dry-run smoke test
-│   └── integration-harness.js          ← Full end-to-end harness
-├── examples/bookstore-sync.json        ← Mapping config example
-└── package.json
-```
+<!-- bespoke diagram: edit diagrams/module-layout.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper -->
+![Module layout](diagrams/module-layout.svg)
 
 ## Mapping config format
 

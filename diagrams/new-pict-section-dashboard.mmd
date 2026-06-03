@@ -1,0 +1,10 @@
+pict-section-dashboard
+  ├── Pict-Section-Dashboard.js              ← provider entry
+  ├── source/views/
+  │     PictView-Dashboard-Root.js            ← walks the layout tree, dispatches
+  │     PictView-Dashboard-Layout-Row.js      ← row primitive (flex)
+  │     PictView-Dashboard-Layout-Column.js   ← column primitive (flex)
+  │     PictView-Dashboard-Layout-Grid.js     ← grid primitive (CSS grid)
+  │     PictView-Dashboard-Panel.js           ← panel leaf; dispatches by Type
+  └── source/providers/
+        Pict-Provider-DashboardData.js        ← fetches operation results from a databeacon

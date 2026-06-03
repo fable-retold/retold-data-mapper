@@ -224,18 +224,8 @@ the cases you flagged without locking us in:
 - "3 pie charts on the same row"     → `row[chart, chart, chart]`
 - Mixed                              → `column[row[chart, chart, chart], list-paged]`
 
-```
-pict-section-dashboard
-  ├── Pict-Section-Dashboard.js              ← provider entry
-  ├── source/views/
-  │     PictView-Dashboard-Root.js            ← walks the layout tree, dispatches
-  │     PictView-Dashboard-Layout-Row.js      ← row primitive (flex)
-  │     PictView-Dashboard-Layout-Column.js   ← column primitive (flex)
-  │     PictView-Dashboard-Layout-Grid.js     ← grid primitive (CSS grid)
-  │     PictView-Dashboard-Panel.js           ← panel leaf; dispatches by Type
-  └── source/providers/
-        Pict-Provider-DashboardData.js        ← fetches operation results from a databeacon
-```
+<!-- bespoke diagram: edit diagrams/new-pict-section-dashboard.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper -->
+![NEW: pict-section-dashboard](diagrams/new-pict-section-dashboard.svg)
 
 Each panel resolves its data from an `OperationHash` reference →
 reads pre-computed result tables from the lake-databeacon via mesh.

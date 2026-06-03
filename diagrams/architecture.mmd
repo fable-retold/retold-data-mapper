@@ -1,0 +1,15 @@
+retold-data-mapper (CLI)
+│
+├─ fable-ultravisor-client ────- Ultravisor (NOC)
+│     │                                │
+│     │  DataBeaconManagement:Introspect (schemas + columns)
+│     │  MeadowProxy:Request GET       (paginated reads from source)
+│     │  MeadowProxy:Request POST/PUT  (writes to target)
+│     │                                │
+│     ├── AffinityKey: source-beacon ──┤── DataBeacon-A → MSSQL
+│     └── AffinityKey: target-beacon ──┘── DataBeacon-B → PostgreSQL
+│
+├─ Mapping config (JSON)
+│     SourceEntity.Fields.Source ──- TargetEntity.Fields.Target
+│
+└─ CLI summary: "Synced 20 records | 0 errors | 0 skipped"

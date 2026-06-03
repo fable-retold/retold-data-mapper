@@ -1,0 +1,15 @@
+retold-data-mapper/
+├── bin/retold-data-mapper.js           ← CLI entry
+├── source/
+│   ├── Retold-DataMapper.js            ← Main fable service
+│   └── services/
+│       ├── DataMapper-Discovery.js     ← Mesh introspection + cache
+│       ├── DataMapper-Validator.js     ← Config ↔ schema validation
+│       ├── DataMapper-SyncEngine.js    ← Read/transform/write loop
+│       └── DataMapper-Reporter.js      ← Per-entity stats + summary
+├── test/
+│   ├── DataMapper_tests.js             ← 20 unit tests (mocked mesh)
+│   ├── DataMapper-Integration_tests.js ← Dry-run smoke test
+│   └── integration-harness.js          ← Full end-to-end harness
+├── examples/bookstore-sync.json        ← Mapping config example
+└── package.json
