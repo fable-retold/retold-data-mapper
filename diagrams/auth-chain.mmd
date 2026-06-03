@@ -1,0 +1,8 @@
+graph TD
+    CustomerBeacon["Customer beacon"]
+    UV["ultravisor"]
+    AuthBeacon["ultravisor-auth-beacon<br/>↳ validates token + UID<br/>↳ issues mesh session"]
+    Registered["Beacon registered"]
+    CustomerBeacon -->|bearer token + UID| UV
+    UV --> AuthBeacon
+    AuthBeacon --> Registered

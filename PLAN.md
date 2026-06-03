@@ -40,35 +40,8 @@ from those projections without authoring operations themselves.
 
 ### Topology
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Customer side                                               │
-│    retold-databeacon                                         │
-│      ↑ bearer token + UID (beacon hash)                      │
-│      ↓ mesh (auth-gated WebSocket)                           │
-└───────────────────────┬──────────────────────────────────────┘
-                        │
-┌───────────────────────▼──────────────────────────────────────┐
-│  Our infrastructure (one stack)                              │
-│                                                              │
-│    ultravisor              ← mesh orchestrator               │
-│    ultravisor-auth-beacon  ← validates bearer + UID          │
-│                                                              │
-│    retold-data-mapper      ← UI orchestrator (operator)      │
-│    meadow-integration      ← execution engine (jobs)         │
-│                                                              │
-│    retold-databeacon[lake-postgres]                          │
-│      ↳ per-customer databases (raw cloned data + cached      │
-│         views)                                               │
-│    retold-databeacon[opdb-mysql]                             │
-│      ↳ Meadow-endpoints schema (operational data)            │
-│    retold-databeacon[configs-sqlite]                         │
-│      ↳ MappingConfig + OperationConfig + DashboardConfig     │
-│                                                              │
-│    customer-portal (or hosted route in retold-content-system)│
-│      ↳ hosts pict-section-dashboard for customer-facing UI   │
-└──────────────────────────────────────────────────────────────┘
-```
+<!-- bespoke diagram: edit diagrams/topology.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper -->
+![Topology](diagrams/topology.svg)
 
 ### Component responsibilities
 
@@ -84,17 +57,8 @@ from those projections without authoring operations themselves.
 
 ### Auth chain
 
-```
-Customer beacon  ──(bearer token + UID)──▶  ultravisor
-                                              │
-                                              ▼
-                                        ultravisor-auth-beacon
-                                          ↳ validates token + UID
-                                          ↳ issues mesh session
-                                              │
-                                              ▼
-                                        Beacon registered
-```
+<!-- bespoke diagram: edit diagrams/auth-chain.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper -->
+![Auth chain](diagrams/auth-chain.svg)
 
 Customer-side onboarding artifact = `(UID, BearerToken)` pair we
 issue. The customer pastes those into their `retold-databeacon` env
@@ -102,23 +66,8 @@ vars; from then on the beacon connects autonomously.
 
 ### Data flow
 
-```
-[customer DB]
-     │ (clone job, dispatched by mapper, executed by meadow-integration)
-     ▼
-[retold-databeacon[lake-postgres]: customer-X-database]
-     │ (lake → opdb mapping, defined in mapper UI, executed by meadow-integration)
-     ▼
-[retold-databeacon[opdb-mysql]: meadow schema]
-     │ (operational use; CRUD by users via platform UI)
-     │
-     │ (opdb → cached-view operation, defined in mapper UI, typed Ext/Agg/Hist/Int)
-     ▼
-[retold-databeacon[lake-postgres]: customer-X-database, cached-view tables]
-     │ (read by pict-section-dashboard via mesh)
-     ▼
-[customer-portal: configurable dashboards]
-```
+<!-- bespoke diagram: edit diagrams/data-flow.mmd or .hints.json, then: npx pict-renderer-graph build modules/apps/retold-data-mapper -->
+![Data flow](diagrams/data-flow.svg)
 
 ### The four operations (compositional, applied at mapping time)
 

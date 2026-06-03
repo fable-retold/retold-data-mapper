@@ -1,0 +1,333 @@
+{
+	"type": "excalidraw",
+	"version": 2,
+	"source": "pict-section-excalidraw/notebook-generator",
+	"elements": [
+		{
+			"id": "shape-CustomerSide-000000r0",
+			"type": "rectangle",
+			"x": 324,
+			"y": 16,
+			"width": 407,
+			"height": 128,
+			"angle": 0,
+			"strokeColor": "#1B1F23",
+			"backgroundColor": "transparent",
+			"fillStyle": "solid",
+			"strokeWidth": 2,
+			"strokeStyle": "solid",
+			"roughness": 1,
+			"opacity": 100,
+			"groupIds": [],
+			"frameId": null,
+			"roundness": {
+				"type": 3
+			},
+			"seed": 972,
+			"version": 1,
+			"versionNonce": 972,
+			"isDeleted": false,
+			"boundElements": [
+				{
+					"id": "arrow-CustomerSide-OurInfra-000000co",
+					"type": "arrow"
+				}
+			],
+			"updated": 1,
+			"link": null,
+			"locked": false,
+			"index": null
+		},
+		{
+			"id": "label-CustomerSide-000000kd",
+			"type": "text",
+			"x": 324,
+			"y": 62.5,
+			"width": 407,
+			"height": 60,
+			"angle": 0,
+			"strokeColor": "#1B1F23",
+			"backgroundColor": "transparent",
+			"fillStyle": "solid",
+			"strokeWidth": 1,
+			"strokeStyle": "solid",
+			"roughness": 1,
+			"opacity": 100,
+			"groupIds": [],
+			"frameId": null,
+			"roundness": null,
+			"seed": 733,
+			"version": 1,
+			"versionNonce": 733,
+			"isDeleted": false,
+			"boundElements": null,
+			"updated": 1,
+			"link": null,
+			"locked": false,
+			"text": "retold-databeacon\n↑ bearer token + UID (beacon hash)\n↓ mesh (auth-gated WebSocket)",
+			"fontSize": 16,
+			"fontFamily": 5,
+			"textAlign": "center",
+			"verticalAlign": "top",
+			"baseline": 15,
+			"containerId": null,
+			"originalText": "retold-databeacon\n↑ bearer token + UID (beacon hash)\n↓ mesh (auth-gated WebSocket)",
+			"autoResize": true,
+			"lineHeight": 1.25,
+			"index": null
+		},
+		{
+			"id": "shape-OurInfra-000000aw",
+			"type": "rectangle",
+			"x": 16,
+			"y": 234,
+			"width": 1023,
+			"height": 253,
+			"angle": 0,
+			"strokeColor": "#1B1F23",
+			"backgroundColor": "transparent",
+			"fillStyle": "solid",
+			"strokeWidth": 2,
+			"strokeStyle": "solid",
+			"roughness": 1,
+			"opacity": 100,
+			"groupIds": [],
+			"frameId": null,
+			"roundness": {
+				"type": 3
+			},
+			"seed": 392,
+			"version": 1,
+			"versionNonce": 392,
+			"isDeleted": false,
+			"boundElements": [
+				{
+					"id": "label-OurInfra-0000006g",
+					"type": "text"
+				},
+				{
+					"id": "arrow-CustomerSide-OurInfra-000000co",
+					"type": "arrow"
+				}
+			],
+			"updated": 1,
+			"link": null,
+			"locked": false,
+			"index": null
+		},
+		{
+			"id": "label-OurInfra-0000006g",
+			"type": "text",
+			"x": 24,
+			"y": 248,
+			"width": 1007,
+			"height": 225,
+			"angle": 0,
+			"strokeColor": "#1B1F23",
+			"backgroundColor": "transparent",
+			"fillStyle": "solid",
+			"strokeWidth": 1,
+			"strokeStyle": "solid",
+			"roughness": 1,
+			"opacity": 100,
+			"groupIds": [],
+			"frameId": null,
+			"roundness": null,
+			"seed": 232,
+			"version": 1,
+			"versionNonce": 232,
+			"isDeleted": false,
+			"boundElements": null,
+			"updated": 1,
+			"link": null,
+			"locked": false,
+			"text": "Our infrastructure (one stack)\nultravisor ← mesh orchestrator\nultravisor-auth-beacon ← validates bearer + UID\nretold-data-mapper ← UI orchestrator (operator)\nmeadow-integration ← execution engine (jobs)\nretold-databeacon[lake-postgres] ↳ per-customer databases (raw cloned data + cached views)\nretold-databeacon[opdb-mysql] ↳ Meadow-endpoints schema (operational data)\nretold-databeacon[configs-sqlite] ↳ MappingConfig + OperationConfig + DashboardConfig\ncustomer-portal ↳ hosts pict-section-dashboard for customer-facing UI",
+			"fontSize": 20,
+			"fontFamily": 5,
+			"textAlign": "center",
+			"verticalAlign": "middle",
+			"baseline": 15,
+			"containerId": "shape-OurInfra-000000aw",
+			"originalText": "Our infrastructure (one stack)\nultravisor ← mesh orchestrator\nultravisor-auth-beacon ← validates bearer + UID\nretold-data-mapper ← UI orchestrator (operator)\nmeadow-integration ← execution engine (jobs)\nretold-databeacon[lake-postgres] ↳ per-customer databases (raw cloned data + cached views)\nretold-databeacon[opdb-mysql] ↳ Meadow-endpoints schema (operational data)\nretold-databeacon[configs-sqlite] ↳ MappingConfig + OperationConfig + DashboardConfig\ncustomer-portal ↳ hosts pict-section-dashboard for customer-facing UI",
+			"autoResize": true,
+			"lineHeight": 1.25,
+			"index": null
+		},
+		{
+			"id": "arrow-CustomerSide-OurInfra-000000co",
+			"type": "arrow",
+			"x": 527.5,
+			"y": 144,
+			"width": 2.2737367544323206e-13,
+			"height": 90,
+			"angle": 0,
+			"strokeColor": "#2E7D74",
+			"backgroundColor": "transparent",
+			"fillStyle": "solid",
+			"strokeWidth": 2,
+			"strokeStyle": "solid",
+			"roughness": 1,
+			"opacity": 100,
+			"groupIds": [],
+			"frameId": null,
+			"roundness": null,
+			"seed": 456,
+			"version": 1,
+			"versionNonce": 456,
+			"isDeleted": false,
+			"boundElements": [],
+			"updated": 1,
+			"link": null,
+			"locked": false,
+			"points": [
+				[
+					0,
+					0
+				],
+				[
+					0,
+					16
+				],
+				[
+					1.1368683772161603e-13,
+					19.875171467764034
+				],
+				[
+					-1.1368683772161603e-13,
+					23.519890260631
+				],
+				[
+					1.1368683772161603e-13,
+					26.96296296296299
+				],
+				[
+					1.1368683772161603e-13,
+					30.233196159122087
+				],
+				[
+					1.1368683772161603e-13,
+					33.35939643347049
+				],
+				[
+					0,
+					36.37037037037041
+				],
+				[
+					0,
+					39.29492455418384
+				],
+				[
+					1.1368683772161603e-13,
+					42.161865569272976
+				],
+				[
+					0,
+					45
+				],
+				[
+					1.1368683772161603e-13,
+					47.83813443072705
+				],
+				[
+					0,
+					50.70507544581619
+				],
+				[
+					0,
+					53.62962962962962
+				],
+				[
+					0,
+					56.64060356652948
+				],
+				[
+					0,
+					59.76680384087791
+				],
+				[
+					0,
+					63.03703703703707
+				],
+				[
+					0,
+					66.480109739369
+				],
+				[
+					0,
+					70.12482853223594
+				],
+				[
+					0,
+					74
+				],
+				[
+					0,
+					90
+				]
+			],
+			"lastCommittedPoint": null,
+			"startBinding": {
+				"elementId": "shape-CustomerSide-000000r0",
+				"focus": 0,
+				"gap": 8
+			},
+			"endBinding": {
+				"elementId": "shape-OurInfra-000000aw",
+				"focus": 0,
+				"gap": 8
+			},
+			"startArrowhead": null,
+			"endArrowhead": "arrow",
+			"elbowed": false,
+			"index": null
+		},
+		{
+			"id": "label-CustomerSide-000000kd_title",
+			"type": "text",
+			"x": 324,
+			"y": 37.5,
+			"width": 407,
+			"height": 25,
+			"angle": 0,
+			"strokeColor": "#1B1F23",
+			"backgroundColor": "transparent",
+			"fillStyle": "solid",
+			"strokeWidth": 1,
+			"strokeStyle": "solid",
+			"roughness": 1,
+			"opacity": 100,
+			"groupIds": [],
+			"frameId": null,
+			"roundness": null,
+			"seed": 196,
+			"version": 1,
+			"versionNonce": 733,
+			"isDeleted": false,
+			"boundElements": null,
+			"updated": 1,
+			"link": null,
+			"locked": false,
+			"text": "Customer side",
+			"fontSize": 20,
+			"fontFamily": 5,
+			"textAlign": "center",
+			"verticalAlign": "top",
+			"baseline": 15,
+			"containerId": null,
+			"originalText": "Customer side",
+			"autoResize": true,
+			"lineHeight": 1.25,
+			"index": null
+		}
+	],
+	"appState": {
+		"viewBackgroundColor": "#FBF7EE",
+		"theme": "light",
+		"gridSize": null,
+		"exportBackground": true,
+		"exportEmbedScene": true,
+		"exportScale": 1,
+		"currentItemFontFamily": 5
+	},
+	"files": {}
+}

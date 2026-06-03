@@ -1,0 +1,4 @@
+graph TD
+    CustomerSide["Customer side<br/>retold-databeacon<br/>↑ bearer token + UID (beacon hash)<br/>↓ mesh (auth-gated WebSocket)"]
+    OurInfra["Our infrastructure (one stack)<br/>ultravisor ← mesh orchestrator<br/>ultravisor-auth-beacon ← validates bearer + UID<br/>retold-data-mapper ← UI orchestrator (operator)<br/>meadow-integration ← execution engine (jobs)<br/>retold-databeacon[lake-postgres] ↳ per-customer databases (raw cloned data + cached views)<br/>retold-databeacon[opdb-mysql] ↳ Meadow-endpoints schema (operational data)<br/>retold-databeacon[configs-sqlite] ↳ MappingConfig + OperationConfig + DashboardConfig<br/>customer-portal ↳ hosts pict-section-dashboard for customer-facing UI"]
+    CustomerSide --> OurInfra

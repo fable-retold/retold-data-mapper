@@ -1,0 +1,10 @@
+graph TD
+    CustomerDB["[customer DB]"]
+    Lake["[retold-databeacon[lake-postgres]: customer-X-database]"]
+    OpDB["[retold-databeacon[opdb-mysql]: meadow schema]"]
+    CachedViews["[retold-databeacon[lake-postgres]: customer-X-database, cached-view tables]"]
+    Portal["[customer-portal: configurable dashboards]"]
+    CustomerDB -->|clone job, dispatched by mapper, executed by meadow-integration| Lake
+    Lake -->|lake → opdb mapping, defined in mapper UI, executed by meadow-integration| OpDB
+    OpDB -->|opdb → cached-view operation, defined in mapper UI, typed Ext/Agg/Hist/Int| CachedViews
+    CachedViews -->|read by pict-section-dashboard via mesh| Portal
