@@ -1847,6 +1847,9 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 							case 'extraction':
 								tmpGraph = _self._compileExtractionToOperation(pOperation);
 								break;
+							case 'unnest':
+								tmpGraph = _self._compileUnnestToOperation(pOperation);
+								break;
 							case 'passthroughclone':
 								tmpGraph = _self._compileCloneToOperation(pOperation);
 								break;
@@ -1866,7 +1869,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 								tmpGraph = _self._compileSQLJoinToOperation(pOperation);
 								break;
 							default:
-								tmpDispatchErr = 'OperationType "' + pOperation.OperationType + '" not supported. Expected one of: Extraction, PassthroughClone, Aggregation, SQLAggregate, Histogram, Intersection, SQLJoin.';
+								tmpDispatchErr = 'OperationType "' + pOperation.OperationType + '" not supported. Expected one of: Extraction, Unnest, PassthroughClone, Aggregation, SQLAggregate, Histogram, Intersection, SQLJoin.';
 						}
 						if (tmpDispatchErr)
 						{
@@ -2459,6 +2462,134 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 					// State (data) flow
 					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-so-Result',         TargetNodeHash: 'extract',       TargetPortHash: 'x-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
 					{ SourceNodeHash: 'extract',       SourcePortHash: 'x-so-Result',         TargetNodeHash: 'comprehension', TargetPortHash: 'c-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-so-Comprehension',  TargetNodeHash: 'write',         TargetPortHash: 'w-si-Comprehension', ConnectionType: 'State', Data: { StateKey: 'Comprehension' } }
+				],
+				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
+			}
+		};
+	}
+
+	/**
+	 * Compile an OperationConfig (OperationType=Unnest) into the same
+	 * Pull → <middle> → Comprehend → Write graph as Extraction, except the
+	 * middle node is UnnestRecords: it explodes OperationConfiguration.ArrayPath
+	 * into one record per element (1→N). ElementProjection / ParentCarry / Filter
+	 * attribute to the Unnest node in the manifest.
+	 */
+	_compileUnnestToOperation(pOperation)
+	{
+		let tmpCfg = pOperation.OperationConfiguration || {};
+		if (typeof tmpCfg === 'string')
+		{
+			try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; }
+		}
+
+		let tmpEntity = tmpCfg.Entity || pOperation.TargetTable || 'Record';
+		let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+		let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
+		let tmpArrayPath = tmpCfg.ArrayPath || '';
+		let tmpElementProjection = tmpCfg.ElementProjection || {};
+		let tmpParentCarry = tmpCfg.ParentCarry || {};
+		let tmpFilter = tmpCfg.Filter || null;
+		let tmpSolvers = Array.isArray(tmpCfg.Solvers) ? tmpCfg.Solvers : [];
+		let tmpHashSeed = (pOperation.Hash || ('operation-' + pOperation.IDOperationConfig));
+		let tmpName = pOperation.Name || ('Operation ' + (pOperation.Hash || pOperation.IDOperationConfig));
+
+		return {
+			Name: tmpName,
+			Description: pOperation.Description || '',
+			Tags: ['data-mapper', 'operation', 'unnest', tmpHashSeed],
+			Author: 'retold-data-mapper',
+			Version: '1.0.0',
+			Graph: {
+				Nodes: [
+					{ Hash: 'start', Type: 'start', X: 50, Y: 200, Width: 100, Height: 60, Title: 'Start',
+					  Ports: [ { Hash: 'start-eo-out', Direction: 'output', Side: 'right-bottom' } ] },
+
+					{ Hash: 'pull', Type: 'beacon-datamapperrecords-pullrecords',
+					  X: 220, Y: 180, Width: 220, Height: 140, Title: 'Pull ' + (pOperation.SourceEntity || '?'),
+					  Ports: [
+						{ Hash: 'p-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'p-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'p-so-Result',   Direction: 'output', Side: 'right-top',    Label: 'Result' }
+					  ],
+					  Data: {
+						SourceBeaconName: pOperation.SourceBeaconName || '',
+						ConnectionHash:   pOperation.SourceConnectionHash || '',
+						Entity:           pOperation.SourceEntity || '',
+						BatchSize:        500,
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'unnest', Type: 'beacon-datamappertransform-unnestrecords',
+					  X: 480, Y: 180, Width: 220, Height: 140, Title: 'Unnest → ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'u-ei-Trigger',  Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'u-eo-Complete', Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'u-si-Records',  Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'u-so-Result',   Direction: 'output', Side: 'right-top',   Label: 'Result' }
+					  ],
+					  Data: {
+						OperationConfiguration: JSON.stringify({
+							Entity:            tmpEntity,
+							GUIDName:          tmpGUIDName,
+							GUIDTemplate:      tmpGUIDTemplate,
+							ArrayPath:         tmpArrayPath,
+							ElementProjection: tmpElementProjection,
+							ParentCarry:       tmpParentCarry,
+							Filter:            tmpFilter,
+							Solvers:           tmpSolvers
+						}),
+						AffinityKey:  'data-mapper'
+					  }
+					},
+
+					{ Hash: 'comprehension', Type: 'beacon-datamappertransform-buildcomprehension',
+					  X: 740, Y: 180, Width: 240, Height: 140, Title: 'Comprehend ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'c-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'c-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'c-si-Records',       Direction: 'input',  Side: 'left-top',    Label: 'Records' },
+						{ Hash: 'c-so-Comprehension', Direction: 'output', Side: 'right-top',   Label: 'Comprehension' }
+					  ],
+					  Data: {
+						Entity:       tmpEntity,
+						GUIDField:    tmpGUIDName,
+						AffinityKey:  'data-mapper'
+					  }
+					},
+
+					{ Hash: 'write', Type: 'beacon-datamapperrecords-writerecords',
+					  X: 1020, Y: 180, Width: 240, Height: 140, Title: 'Upsert ' + tmpEntity,
+					  Ports: [
+						{ Hash: 'w-ei-Trigger',       Direction: 'input',  Side: 'left-bottom', Label: 'Trigger' },
+						{ Hash: 'w-eo-Complete',      Direction: 'output', Side: 'right-bottom', Label: 'Complete' },
+						{ Hash: 'w-si-Comprehension', Direction: 'input',  Side: 'left-top',    Label: 'Comprehension' }
+					  ],
+					  Data: {
+						TargetBeaconName: pOperation.TargetBeaconName || '',
+						ConnectionHash:   pOperation.TargetConnectionHash || '',
+						Entity:           tmpEntity,
+						GUIDName:         tmpGUIDName,
+						Concurrency:      Math.max(1, Math.min(5, pOperation.Concurrency || 5)),
+						ResetMode:        (pOperation.ResetMode === 'Replace') ? 'Replace' : 'Append',
+						AffinityKey:      'data-mapper'
+					  }
+					},
+
+					{ Hash: 'end', Type: 'end', X: 1300, Y: 220, Width: 100, Height: 60, Title: 'End',
+					  Ports: [ { Hash: 'end-ei-in', Direction: 'input', Side: 'left-bottom' } ] }
+				],
+				Connections: [
+					{ SourceNodeHash: 'start',         SourcePortHash: 'start-eo-out',   TargetNodeHash: 'pull',          TargetPortHash: 'p-ei-Trigger' },
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-eo-Complete',  TargetNodeHash: 'unnest',        TargetPortHash: 'u-ei-Trigger' },
+					{ SourceNodeHash: 'unnest',        SourcePortHash: 'u-eo-Complete',  TargetNodeHash: 'comprehension', TargetPortHash: 'c-ei-Trigger' },
+					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-eo-Complete',  TargetNodeHash: 'write',         TargetPortHash: 'w-ei-Trigger' },
+					{ SourceNodeHash: 'write',         SourcePortHash: 'w-eo-Complete',  TargetNodeHash: 'end',           TargetPortHash: 'end-ei-in' },
+
+					{ SourceNodeHash: 'pull',          SourcePortHash: 'p-so-Result',         TargetNodeHash: 'unnest',        TargetPortHash: 'u-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
+					{ SourceNodeHash: 'unnest',        SourcePortHash: 'u-so-Result',         TargetNodeHash: 'comprehension', TargetPortHash: 'c-si-Records',       ConnectionType: 'State', Data: { StateKey: 'Records' } },
 					{ SourceNodeHash: 'comprehension', SourcePortHash: 'c-so-Comprehension',  TargetNodeHash: 'write',         TargetPortHash: 'w-si-Comprehension', ConnectionType: 'State', Data: { StateKey: 'Comprehension' } }
 				],
 				ViewState: { PanX: 0, PanY: 0, Zoom: 1 }
@@ -3134,6 +3265,17 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				}
 				break;
 
+			case 'unnest':
+				if (!tmpCfg.ArrayPath || typeof tmpCfg.ArrayPath !== 'string')
+				{
+					return new Error('Unnest requires OperationConfiguration.ArrayPath (dotted path to the array-of-objects column, e.g. "FormData.MoistureTable").');
+				}
+				if (!tmpCfg.ElementProjection || typeof tmpCfg.ElementProjection !== 'object' || Object.keys(tmpCfg.ElementProjection).length === 0)
+				{
+					return new Error('Unnest requires OperationConfiguration.ElementProjection (non-empty {targetCol: "{~D:Element.field~}"}).');
+				}
+				break;
+
 			case 'passthroughclone':
 				// Projection is OPTIONAL on PassthroughClone (a 1:1 mirror
 				// passes the source record through as-is). GUIDTemplate is
@@ -3299,7 +3441,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				break;
 
 			default:
-				return new Error('Unknown OperationType "' + pOperation.OperationType + '". Expected Extraction | PassthroughClone | Aggregation | SQLAggregate | Histogram | Intersection | SQLJoin.');
+				return new Error('Unknown OperationType "' + pOperation.OperationType + '". Expected Extraction | Unnest | PassthroughClone | Aggregation | SQLAggregate | Histogram | Intersection | SQLJoin.');
 		}
 		return null;
 	}
@@ -3344,6 +3486,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			switch (tmpType)
 			{
 				case 'extraction':       tmpGraph = this._compileExtractionToOperation(pOperation);   break;
+				case 'unnest':           tmpGraph = this._compileUnnestToOperation(pOperation);       break;
 				case 'passthroughclone': tmpGraph = this._compileCloneToOperation(pOperation);       break;
 				case 'aggregation':      tmpGraph = this._compileAggregationToOperation(pOperation);  break;
 				case 'sqlaggregate':     tmpGraph = this._compileSQLAggregateToOperation(pOperation); break;
