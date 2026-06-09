@@ -10,6 +10,7 @@
  *   DataMapperRecords:PullRecords         — read all records from a beacon entity
  *   DataMapperTransform:MapRecords          — apply MappingConfiguration to a batch of records
  *   DataMapperTransform:ExtractRecords      — Phase 2b Extraction: filter + project a batch
+ *   DataMapperTransform:UnnestRecords       — Explode an array-of-objects column into one record per element (1→N)
  *   DataMapperTransform:AggregateRecords    — Phase 2b Aggregation: Sum/Count/Mean/Min/Max grouped by keys
  *   DataMapperTransform:HistogramRecords    — Phase 2b Histogram: bucket + aggregate per bucket
  *   DataMapperTransform:IntersectRecords    — Phase 2b Intersection: in-memory join Source × Related, OrderBy + Limit
@@ -51,6 +52,213 @@ function _checkRowCount(pAction, pCount)
 			`Either raise the env var (and accept higher memory pressure) or compose smaller input sets via Extraction/Filter upstream.`);
 	}
 	return null;
+}
+
+/**
+ * Resolve a dotted path against an object (UnnestRecords ArrayPath / template lookup).
+ * @param {object} pRoot
+ * @param {string} pPath - e.g. 'FormData.MoistureTable' or 'Element.MoistureOvenHotPlate'
+ * @return {*} value at the path, or undefined when any hop is missing
+ */
+function _unnestGetByPath(pRoot, pPath)
+{
+	if (!pRoot || !pPath)
+	{
+		return undefined;
+	}
+	let tmpCursor = pRoot;
+	let tmpSegments = String(pPath).split('.');
+	for (let i = 0; i < tmpSegments.length; i++)
+	{
+		if (tmpCursor === null || typeof (tmpCursor) !== 'object')
+		{
+			return undefined;
+		}
+		tmpCursor = tmpCursor[tmpSegments[i]];
+	}
+	return tmpCursor;
+}
+
+/**
+ * Lightweight {~D:Record.<dotted.path>~} resolver for the no-Pict fallback path.
+ * A template that is exactly one token returns the native value; a multi-token
+ * template returns a string. Non-string templates pass through unchanged.
+ * @param {string} pTemplate
+ * @param {object} pRoot
+ * @return {*}
+ */
+function _unnestResolveTemplate(pTemplate, pRoot)
+{
+	if (typeof (pTemplate) !== 'string')
+	{
+		return pTemplate;
+	}
+	let tmpWhole = pTemplate.match(/^\{~D:Record\.([^~]+)~\}$/);
+	if (tmpWhole)
+	{
+		return _unnestGetByPath(pRoot, tmpWhole[1]);
+	}
+	return pTemplate.replace(/\{~D:Record\.([^~]+)~\}/g, function (pMatch, pPath)
+	{
+		let tmpValue = _unnestGetByPath(pRoot, pPath);
+		return (tmpValue === undefined || tmpValue === null) ? '' : String(tmpValue);
+	});
+}
+
+/**
+ * UnnestRecords handler logic — explode an array-of-objects column into one
+ * record per element (1→N). Module-level + dependency-injected so it is
+ * unit-testable without standing up the full beacon. Each emitted row is built
+ * from a synthetic per-element record { ...ParentRow, ElementIndex, Element },
+ * resolving ParentCarry against Record.* and ElementProjection against the
+ * Element (rewritten to Record.Element.* so the existing template grammar
+ * applies). A JSON-string ArrayPath column is parsed inline.
+ *
+ * @param {object} pWorkItem - { Settings: { Records, OperationConfiguration } }
+ * @param {Function} fHandlerCallback - (error, { Outputs, Log })
+ * @param {object} pFable - Fable instance (log + serviceManager + parseTemplate)
+ * @param {Function} [pTabularTransformLib] - meadow-integration TabularTransform (Pict path)
+ * @param {Function} pCheckRowCount - the in-memory row-count guard
+ */
+function _unnestRecordsHandler(pWorkItem, fHandlerCallback, pFable, pTabularTransformLib, pCheckRowCount)
+{
+	let tmpStartMs = Date.now();
+	let tmpSettings = pWorkItem.Settings || {};
+	let tmpRecords = tmpSettings.Records || [];
+	let tmpCfg = tmpSettings.OperationConfiguration || {};
+	if (typeof (tmpRecords) === 'string') { try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { pFable.log.error(`UnnestRecords: Records parse error: ${e.message}`); tmpRecords = []; } }
+	if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { pFable.log.error(`UnnestRecords: OperationConfiguration parse error: ${e.message}`); tmpCfg = {}; } }
+
+	if (Array.isArray(tmpRecords))
+	{
+		let tmpGuard = pCheckRowCount('UnnestRecords', tmpRecords.length);
+		if (tmpGuard) { return fHandlerCallback(tmpGuard); }
+	}
+
+	let tmpEntity = tmpCfg.Entity || 'Record';
+	let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
+	let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
+	let tmpArrayPath = tmpCfg.ArrayPath || '';
+	let tmpElementProjection = (tmpCfg.ElementProjection && typeof (tmpCfg.ElementProjection) === 'object') ? tmpCfg.ElementProjection : {};
+	let tmpParentCarry = (tmpCfg.ParentCarry && typeof (tmpCfg.ParentCarry) === 'object') ? tmpCfg.ParentCarry : {};
+	let tmpFilter = tmpCfg.Filter || null;
+	let tmpSolvers = Array.isArray(tmpCfg.Solvers) ? tmpCfg.Solvers : [];
+
+	if (!Array.isArray(tmpRecords))
+	{
+		return fHandlerCallback(null, {
+			Outputs: { Result: '[]', RecordCount: 0, ElementCount: 0, FilteredOutCount: 0, SkippedNoArray: 0, Errors: [] },
+			Log: [`UnnestRecords: input Records was not an array (got ${typeof (tmpRecords)}).`]
+		});
+	}
+	if (!tmpArrayPath)
+	{
+		return fHandlerCallback(new Error('UnnestRecords: OperationConfiguration.ArrayPath is required (dotted path to the array-of-objects column).'));
+	}
+
+	// Merge ParentCarry (Record.* scope, as-is) with ElementProjection
+	// (Element.* scope, rewritten to Record.Element.* so the existing
+	// {~D:Record.X~} grammar resolves against the synthetic per-element row).
+	let tmpMappings = {};
+	let tmpCarryKeys = Object.keys(tmpParentCarry);
+	for (let c = 0; c < tmpCarryKeys.length; c++)
+	{
+		tmpMappings[tmpCarryKeys[c]] = tmpParentCarry[tmpCarryKeys[c]];
+	}
+	let tmpProjKeys = Object.keys(tmpElementProjection);
+	for (let p = 0; p < tmpProjKeys.length; p++)
+	{
+		let tmpVal = tmpElementProjection[tmpProjKeys[p]];
+		tmpMappings[tmpProjKeys[p]] = (typeof (tmpVal) === 'string') ? tmpVal.replace(/\{~(D|JSON):Element\./g, '{~$1:Record.Element.') : tmpVal;
+	}
+
+	let tmpMappingConfig = { Entity: tmpEntity, GUIDName: tmpGUIDName, GUIDTemplate: tmpGUIDTemplate, Mappings: tmpMappings, Solvers: tmpSolvers };
+
+	let tmpTransform = null;
+	if (pTabularTransformLib && typeof (pFable.parseTemplate) === 'function')
+	{
+		pFable.serviceManager.addServiceTypeIfNotExists('TabularTransform', pTabularTransformLib);
+		tmpTransform = pFable.serviceManager.instantiateServiceProviderIfNotExists('TabularTransform');
+	}
+
+	let tmpEmitted = [];
+	let tmpFilteredOut = 0;
+	let tmpSkippedNoArray = 0;
+	let tmpErrors = [];
+	let tmpFilterKeys = (tmpFilter && typeof (tmpFilter) === 'object') ? Object.keys(tmpFilter) : [];
+
+	for (let i = 0; i < tmpRecords.length; i++)
+	{
+		let tmpParent = tmpRecords[i];
+		let tmpArray = _unnestGetByPath(tmpParent, tmpArrayPath);
+		if (typeof (tmpArray) === 'string') { try { tmpArray = JSON.parse(tmpArray); } catch (e) { tmpArray = null; } }
+		if (!Array.isArray(tmpArray))
+		{
+			tmpSkippedNoArray++;
+			continue;
+		}
+
+		for (let e = 0; e < tmpArray.length; e++)
+		{
+			let tmpElement = tmpArray[e];
+
+			let tmpKeep = true;
+			for (let f = 0; f < tmpFilterKeys.length; f++)
+			{
+				let tmpKey = tmpFilterKeys[f];
+				let tmpExpected = tmpFilter[tmpKey];
+				let tmpActual = (tmpElement && typeof (tmpElement) === 'object') ? tmpElement[tmpKey] : undefined;
+				if (tmpActual !== tmpExpected && String(tmpActual) !== String(tmpExpected)) { tmpKeep = false; break; }
+			}
+			if (!tmpKeep) { tmpFilteredOut++; continue; }
+
+			let tmpSynthetic = Object.assign({}, tmpParent, { ElementIndex: e, Element: tmpElement });
+			try
+			{
+				let tmpRow;
+				if (tmpTransform && typeof (tmpTransform.createRecordFromMapping) === 'function')
+				{
+					tmpRow = tmpTransform.createRecordFromMapping(tmpSynthetic, tmpMappingConfig, {});
+				}
+				else
+				{
+					tmpRow = {};
+					let tmpMapKeys = Object.keys(tmpMappings);
+					for (let m = 0; m < tmpMapKeys.length; m++)
+					{
+						tmpRow[tmpMapKeys[m]] = _unnestResolveTemplate(tmpMappings[tmpMapKeys[m]], tmpSynthetic);
+					}
+					if (tmpGUIDTemplate) { tmpRow[tmpGUIDName] = _unnestResolveTemplate(tmpGUIDTemplate, tmpSynthetic); }
+				}
+				tmpEmitted.push(tmpRow);
+			}
+			catch (pUnnestErr)
+			{
+				tmpErrors.push({ Index: i, Element: e, Error: pUnnestErr.message });
+				if (tmpErrors.length === 1) { pFable.log.error(`UnnestRecords: first error at record ${i} element ${e}: ${pUnnestErr.message}`); }
+			}
+		}
+
+		// Unnest multiplies rows, so the input guard is not sufficient — check
+		// the running output against the same ceiling.
+		let tmpOutGuard = pCheckRowCount('UnnestRecords (output)', tmpEmitted.length);
+		if (tmpOutGuard) { return fHandlerCallback(tmpOutGuard); }
+	}
+
+	let tmpElapsedMs = Date.now() - tmpStartMs;
+	return fHandlerCallback(null, {
+		Outputs:
+		{
+			RecordCount:      tmpEmitted.length,
+			ElementCount:     tmpEmitted.length,
+			FilteredOutCount: tmpFilteredOut,
+			SkippedNoArray:   tmpSkippedNoArray,
+			Errors:           tmpErrors,
+			ElapsedMs:        tmpElapsedMs,
+			Result:           JSON.stringify(tmpEmitted)
+		},
+		Log: [`UnnestRecords: ${tmpRecords.length} record(s) → ${tmpEmitted.length} element row(s) (filtered out ${tmpFilteredOut}, no-array ${tmpSkippedNoArray}, errors ${tmpErrors.length}) in ${tmpElapsedMs}ms.`]
+	});
 }
 
 /**
@@ -2136,6 +2344,20 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						}
 					},
 
+					'UnnestRecords':
+					{
+						Description: 'Explode an array-of-objects column into one record per element (1→N). Resolves OperationConfiguration.ArrayPath on each source record (a JSON-string column is parsed inline), then emits one record per element from ElementProjection (Element.* scope) + ParentCarry (Record.* scope) + a deterministic per-element GUID. Its own beacon action so the explode and per-element errors attribute to this node in the manifest.',
+						SettingsSchema:
+						[
+							{ Name: 'Records',                DataType: 'Array',  Required: true, Description: 'Source records (typically from a preceding PullRecords).' },
+							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ Entity, GUIDName?, GUIDTemplate?, ArrayPath, ElementProjection{col:"{~D:Element.x~}"}, ParentCarry?{col:"{~D:Record.x~}"}, Filter?, Solvers? }. Bundled as one Object so UV does not template-strip the {~D:...~} placeholders.' }
+						],
+						Handler: function (pWorkItem, pContext, fHandlerCallback)
+						{
+							return _unnestRecordsHandler(pWorkItem, fHandlerCallback, tmpFable, libTabularTransform, _checkRowCount);
+						}
+					},
+
 					'AggregateRecords':
 					{
 						Description: 'Group records by GroupBy keys, compute aggregates (Sum / Count / Mean / Min / Max) per group, project a deterministic GUID per group. Output is one record per unique GroupBy combination, with columns = GroupBy ∪ Aggregates.As ∪ GUID.',
@@ -2658,10 +2880,12 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 				}
 			});
 
-		this.log.info('DataMapperBeaconProvider: registered 3 capabilities (DataMapperSource, DataMapperRecords, DataMapperTransform) with 10 actions.');
+		this.log.info('DataMapperBeaconProvider: registered 3 capabilities (DataMapperSource, DataMapperRecords, DataMapperTransform) with 11 actions.');
 	}
 }
 
 module.exports = DataMapperBeaconProvider;
 // Exposed for unit testing — pure helper, no instance state.
 module.exports._buildSortFilter = _buildSortFilter;
+module.exports._unnestRecordsHandler = _unnestRecordsHandler;
+module.exports._unnestGetByPath = _unnestGetByPath;
