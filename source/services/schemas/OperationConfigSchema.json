@@ -79,7 +79,7 @@
 
 	"_notes":
 	{
-		"OperationType":            "One of: Extraction | Aggregation | Histogram | Intersection. The data-mapper bridge dispatches by this value at compile time.",
+		"OperationType":            "One of: Extraction | Unnest | PassthroughClone | Aggregation | SQLAggregate | Histogram | Intersection | SQLJoin. The data-mapper bridge dispatches by this value at compile time.",
 		"OperationConfiguration":   "Type-specific JSON blob. See PLAN-PHASE-2B-Operation-Types.md §3 for the per-type shape.",
 		"TargetTable":              "Lake table name where the result lands. The data-mapper ensures this table on the target beacon (typically lake-databeacon) via DataBeaconSchema:EnsureSchema before the first run.",
 		"DependsOn":                "JSON-encoded array of OperationConfig hashes this op reads from (e.g. [\"weather-reading-enriched\"]). POST /mapper/uv/run-chain/:id walks the DAG topologically, fails fast on cycles, halts on first error.",

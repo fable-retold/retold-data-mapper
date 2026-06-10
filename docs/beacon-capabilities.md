@@ -87,11 +87,12 @@ Accumulate mapped records into a comprehension keyed by GUID -- `{ Entity: { GUI
 
 ### Typed operations (Phase 2b)
 
-The remaining four actions implement the typed operations. They are fully implemented as capability handlers in `BeaconProvider`, and the ConnectionBridge has compilers that build operation graphs around them, dispatched by `POST /mapper/uv/run-operation/:id`.
+The remaining five actions implement the typed operations. They are fully implemented as capability handlers in `BeaconProvider`, and the ConnectionBridge has compilers that build operation graphs around them, dispatched by `POST /mapper/uv/run-operation/:id`.
 
 | Action | Operation type | What it does |
 |--------|----------------|--------------|
 | `ExtractRecords` | Extraction | Drop rows that fail every `Filter` equality, then project the survivors like a mapping (with a deterministic GUID). |
+| `UnnestRecords` | Unnest | Explode an array-of-objects column (`ArrayPath`) into one record per element (1 → N), hoisting each element's fields (`ElementProjection`) and carrying parent keys (`ParentCarry`). See [Unnest Records](unnest-records.md). |
 | `AggregateRecords` | Aggregation | Group by `GroupBy` keys and compute `Sum` / `Count` / `Mean` / `Min` / `Max` per group; one output record per unique group. |
 | `HistogramRecords` | Histogram | Bucket a column (`DateMonth` / `DateDay` / `DateYear` / `NumericRange`) and aggregate per bucket (and optional group). |
 | `IntersectRecords` | Intersection | In-memory join of `SourceRecords × RelatedRecords` on a key, with optional `OrderBy` and per-source `Limit`, projecting a merged namespace. |
