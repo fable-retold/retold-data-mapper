@@ -9,6 +9,7 @@
   - [REST API](rest-api.md)
   - [Beacon Capabilities](beacon-capabilities.md)
   - [Mapping Configuration](mapping-configuration.md)
+  - [Unnest Records](unnest-records.md)
 
 - Related Modules
 
