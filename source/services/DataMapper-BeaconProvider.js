@@ -106,6 +106,41 @@ function _unnestResolveTemplate(pTemplate, pRoot)
 }
 
 /**
+ * Apply solver expressions to a projected row. Mirrors TabularTransform's
+ * comprehension-path solver loop (ExpressionParser.solve with a source scope
+ * and a separate destination): expressions read the SOURCE scope (e.g.
+ * Record.Field) and assignments land on the projected row. No-op when the
+ * ExpressionParser is unavailable (the no-Pict lightweight fallback, which
+ * has never supported the solver grammar).
+ *
+ * @param {object} pFable
+ * @param {string[]} pSolvers - assignment expressions, e.g. 'X = TONUMBER(Record.A, 0)'
+ * @param {object} pSourceScope - the data the expressions read (e.g. { Record: row })
+ * @param {object} pProjectedRow - assignment destination (mutated)
+ */
+function _applySolvers(pFable, pSolvers, pSourceScope, pProjectedRow)
+{
+	if (!Array.isArray(pSolvers) || pSolvers.length === 0)
+	{
+		return;
+	}
+	if (!pFable.ExpressionParser && pFable.serviceManager)
+	{
+		pFable.serviceManager.instantiateServiceProviderIfNotExists('Math');
+		pFable.serviceManager.instantiateServiceProviderIfNotExists('ExpressionParser');
+	}
+	if (!pFable.ExpressionParser)
+	{
+		return;
+	}
+	let tmpSolverResults = {};
+	for (let i = 0; i < pSolvers.length; i++)
+	{
+		pFable.ExpressionParser.solve(pSolvers[i], pSourceScope, tmpSolverResults, pFable.manifest, pProjectedRow);
+	}
+}
+
+/**
  * UnnestRecords handler logic — explode an array-of-objects column into one
  * record per element (1→N). Module-level + dependency-injected so it is
  * unit-testable without standing up the full beacon. Each emitted row is built
@@ -230,6 +265,7 @@ function _unnestRecordsHandler(pWorkItem, fHandlerCallback, pFable, pTabularTran
 					}
 					if (tmpGUIDTemplate) { tmpRow[tmpGUIDName] = _unnestResolveTemplate(tmpGUIDTemplate, tmpSynthetic); }
 				}
+				_applySolvers(pFable, tmpSolvers, { Record: tmpSynthetic }, tmpRow);
 				tmpEmitted.push(tmpRow);
 			}
 			catch (pUnnestErr)
@@ -2323,7 +2359,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								GUIDName:     tmpGUIDName,
 								GUIDTemplate: tmpGUIDTemplate,
 								Mappings:     tmpProjection,
-								Solvers:      []
+								Solvers:      Array.isArray(tmpCfg.Solvers) ? tmpCfg.Solvers : []
 							};
 
 							// Same TabularTransform availability check as
@@ -2419,6 +2455,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 												(pMatch, pField) => (tmpRow[pField] === undefined || tmpRow[pField] === null) ? '' : String(tmpRow[pField]));
 										}
 									}
+									_applySolvers(tmpFable, Array.isArray(tmpCfg.Solvers) ? tmpCfg.Solvers : [], { Record: tmpRow }, tmpProjected);
 									tmpKept.push(tmpProjected);
 								}
 								catch (pProjErr)
