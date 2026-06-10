@@ -63,24 +63,45 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 		return this._Owner ? this._Owner.getUltravisorClient() : null;
 	}
 
-	_dispatch(pWorkItem, fCallback)
+	// The UV session can go stale under us (a UV restart invalidates it) —
+	// previously every mesh call then failed with "Authentication required."
+	// until a mapper restart. Both call paths reauthenticate once and retry.
+	// (Same self-heal as DataMapper-BeaconProvider._dispatch; the canonical
+	// long-term home is fable-ultravisor-client itself.)
+	_withReauthRetry(fInvoke, fCallback)
 	{
 		let tmpClient = this._client();
 		if (!tmpClient)
 		{
 			return fCallback(new Error('Not connected to an Ultravisor'));
 		}
-		return tmpClient.dispatch(pWorkItem, fCallback);
+		fInvoke(tmpClient, (pError, pResult) =>
+		{
+			if (pError && /authentication required/i.test(pError.message || ''))
+			{
+				this.log.warn('DataMapper ConnectionBridge: mesh call rejected with "Authentication required." — re-authenticating and retrying once.');
+				return tmpClient.authenticate((pAuthError) =>
+				{
+					if (pAuthError)
+					{
+						this.log.error(`DataMapper ConnectionBridge: re-authentication failed (${pAuthError.message}); surfacing the original failure.`);
+						return fCallback(pError);
+					}
+					return fInvoke(tmpClient, fCallback);
+				});
+			}
+			return fCallback(pError, pResult);
+		});
+	}
+
+	_dispatch(pWorkItem, fCallback)
+	{
+		return this._withReauthRetry((pClient, fDone) => pClient.dispatch(pWorkItem, fDone), fCallback);
 	}
 
 	_request(pMethod, pPath, pBody, fCallback)
 	{
-		let tmpClient = this._client();
-		if (!tmpClient)
-		{
-			return fCallback(new Error('Not connected to an Ultravisor'));
-		}
-		return tmpClient.request(pMethod, pPath, pBody, fCallback);
+		return this._withReauthRetry((pClient, fDone) => pClient.request(pMethod, pPath, pBody, fDone), fCallback);
 	}
 
 	_sendError(pResponse, pStatus, pMessage, fNext)
@@ -1573,65 +1594,16 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				let tmpQueryScope = (pRequest.query && pRequest.query.scope !== undefined && pRequest.query.scope !== '*')
 					? String(pRequest.query.scope) : '';
 				let tmpSkipValidation = !!(pRequest.query && (pRequest.query.skipValidation === '1' || pRequest.query.skipValidation === 'true'));
-				let tmpRecord =
-				{
-					Hash:                 String(tmpBody.Hash),
-					Scope:                (tmpBody.Scope !== undefined) ? String(tmpBody.Scope || '') : tmpQueryScope,
-					Name:                 tmpBody.Name || '',
-					Description:          tmpBody.Description || '',
-					OperationType:        String(tmpBody.OperationType),
-					SourceBeaconName:     tmpBody.SourceBeaconName || '',
-					SourceConnectionHash: tmpBody.SourceConnectionHash || '',
-					SourceEntity:         tmpBody.SourceEntity || '',
-					TargetBeaconName:     tmpBody.TargetBeaconName || '',
-					TargetConnectionHash: tmpBody.TargetConnectionHash || '',
-					TargetTable:          tmpBody.TargetTable || '',
-					OperationConfiguration: (typeof tmpBody.OperationConfiguration === 'string')
-						? tmpBody.OperationConfiguration
-						: JSON.stringify(tmpBody.OperationConfiguration || {}),
-					DependsOn:            (tmpBody.DependsOn !== undefined)
-						? (typeof tmpBody.DependsOn === 'string' ? tmpBody.DependsOn : JSON.stringify(tmpBody.DependsOn || []))
-						: '[]',
-					ResetMode:            (tmpBody.ResetMode === 'Replace') ? 'Replace' : 'Append',
-					Concurrency:          (tmpBody.Concurrency != null) ? Math.max(0, parseInt(tmpBody.Concurrency, 10) || 0) : 0
-					// CompiledOperationHash / CompiledOperationConfigHash are
-					// populated by the run-operation path, not by the user.
-				};
-
-				let fPersist = (pValidationWarning) =>
-				{
-					beaconRequestEx('configs-databeacon', 'POST',
-						'/1.0/platform-configs/OperationConfig', tmpRecord,
-						(pError, pResult) =>
-						{
-							if (pError) return _self._sendError(pResponse, 502, pError.message || String(pError), fNext);
-
-							// Eager-register the UV Operation graph so it shows
-							// up in UV's /Operation list before first run.
-							// Best-effort — failures here log but don't block
-							// the create response (run-operation will retry).
-							_self._eagerRegisterOperationGraph(pResult, (pIgnored, pRegResult) =>
-							{
-								let tmpResp = { Success: true, Operation: pResult };
-								if (pValidationWarning) tmpResp.ValidationWarning = pValidationWarning;
-								if (pRegResult) tmpResp.UVRegistration = pRegResult;
-								pResponse.send(tmpResp);
-								return fNext();
-							});
-						});
-				};
-
-				if (tmpSkipValidation) return fPersist('Validation skipped via ?skipValidation=1.');
-
-				// Per-type configuration validation runs first (cheap, local).
-				let tmpCfgErr = _self._validateOperationConfiguration(tmpRecord);
-				if (tmpCfgErr) return _self._sendError(pResponse, 400, tmpCfgErr.message, fNext);
-
-				_self._validateAgainstTarget(tmpRecord, (pValidationErr, pWarning) =>
-				{
-					if (pValidationErr) return _self._sendError(pResponse, 400, pValidationErr.message, fNext);
-					return fPersist(pWarning || null);
-				});
+				_self.registerOperationConfig(tmpBody, { SkipValidation: tmpSkipValidation, Scope: tmpQueryScope },
+					(pError, pResult) =>
+					{
+						if (pError) return _self._sendError(pResponse, pError.StatusCode || 500, pError.message, fNext);
+						let tmpResp = { Success: true, Operation: pResult.Operation };
+						if (pResult.ValidationWarning) tmpResp.ValidationWarning = pResult.ValidationWarning;
+						if (pResult.UVRegistration) tmpResp.UVRegistration = pResult.UVRegistration;
+						pResponse.send(tmpResp);
+						return fNext();
+					});
 			});
 
 		// PUT /mapper/operation/:id — update by primary key.
@@ -3467,6 +3439,121 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	 * Doesn't include Description/Name/Scope (cosmetic) or DependsOn
 	 * (chain-level, not graph-level).
 	 */
+	/**
+	 * Create-or-update an OperationConfig and eager-register its compiled UV
+	 * graph — the single registration path shared by the REST handler
+	 * (POST /mapper/operations) and the DataMapperManagement:RegisterOperation
+	 * capability, so callers on the mesh never need this service's REST surface.
+	 *
+	 * Validation errors carry StatusCode 400; store failures carry 502.
+	 *
+	 * @param {object} pBody - the OperationConfig fields (Hash + OperationType required)
+	 * @param {{ SkipValidation?: boolean, Scope?: string }} [pOptions]
+	 * @param {function} fCallback - function(pError, { Operation, CompiledOperationHash, UVRegistration, ValidationWarning })
+	 */
+	registerOperationConfig(pBody, pOptions, fCallback)
+	{
+		let tmpOptions = pOptions || {};
+		let tmpBody = pBody || {};
+		let fFail = (pStatusCode, pMessage) =>
+		{
+			let tmpError = new Error(pMessage);
+			tmpError.StatusCode = pStatusCode;
+			return fCallback(tmpError);
+		};
+		if (!tmpBody.Hash) return fFail(400, 'RegisterOperation requires Hash');
+		if (!tmpBody.OperationType) return fFail(400, 'RegisterOperation requires OperationType');
+
+		let tmpRecord =
+		{
+			Hash:                 String(tmpBody.Hash),
+			Scope:                (tmpBody.Scope !== undefined) ? String(tmpBody.Scope || '') : String(tmpOptions.Scope || ''),
+			Name:                 tmpBody.Name || '',
+			Description:          tmpBody.Description || '',
+			OperationType:        String(tmpBody.OperationType),
+			SourceBeaconName:     tmpBody.SourceBeaconName || '',
+			SourceConnectionHash: tmpBody.SourceConnectionHash || '',
+			SourceEntity:         tmpBody.SourceEntity || '',
+			TargetBeaconName:     tmpBody.TargetBeaconName || '',
+			TargetConnectionHash: tmpBody.TargetConnectionHash || '',
+			TargetTable:          tmpBody.TargetTable || '',
+			OperationConfiguration: (typeof tmpBody.OperationConfiguration === 'string')
+				? tmpBody.OperationConfiguration
+				: JSON.stringify(tmpBody.OperationConfiguration || {}),
+			DependsOn:            (tmpBody.DependsOn !== undefined)
+				? (typeof tmpBody.DependsOn === 'string' ? tmpBody.DependsOn : JSON.stringify(tmpBody.DependsOn || []))
+				: '[]',
+			ResetMode:            (tmpBody.ResetMode === 'Replace') ? 'Replace' : 'Append',
+			Concurrency:          (tmpBody.Concurrency != null) ? Math.max(0, parseInt(tmpBody.Concurrency, 10) || 0) : 0
+			// CompiledOperationHash / CompiledOperationConfigHash are populated
+			// by eager-registration below, never by the caller.
+		};
+
+		let tmpSelf = this;
+		let fFinish = (pOperationRow, pValidationWarning) =>
+		{
+			tmpSelf._eagerRegisterOperationGraph(pOperationRow, (pIgnored, pRegResult) =>
+			{
+				return fCallback(null,
+				{
+					Operation: pOperationRow,
+					CompiledOperationHash: (pRegResult && pRegResult.OperationHash) || '',
+					UVRegistration: pRegResult || null,
+					ValidationWarning: pValidationWarning || null
+				});
+			});
+		};
+		// The configs store enforces UNIQUE (Scope, Hash) — a re-registration
+		// of an existing definition updates the row in place (and the changed
+		// config hash makes eager-registration recompile).
+		let fUpdateExisting = (pValidationWarning, pOriginalError) =>
+		{
+			tmpSelf._meadowProxyRequest('configs-databeacon', 'GET',
+				`/1.0/platform-configs/OperationConfigs/FilteredTo/FBV~Scope~EQ~${encodeURIComponent(tmpRecord.Scope)}~FBV~Hash~EQ~${encodeURIComponent(tmpRecord.Hash)}/0/2`, null,
+				(pFindError, pRows) =>
+				{
+					let tmpExisting = (Array.isArray(pRows) && pRows[0]) || null;
+					if (pFindError || !tmpExisting || !tmpExisting.IDOperationConfig)
+					{
+						return fFail(502, pOriginalError.message || String(pOriginalError));
+					}
+					let tmpUpdate = Object.assign({}, tmpRecord, { IDOperationConfig: tmpExisting.IDOperationConfig });
+					tmpSelf._meadowProxyRequest('configs-databeacon', 'PUT',
+						`/1.0/platform-configs/OperationConfig/${tmpExisting.IDOperationConfig}`, tmpUpdate,
+						(pPutError) =>
+						{
+							if (pPutError) return fFail(502, pPutError.message || String(pPutError));
+							return fFinish(tmpUpdate, pValidationWarning);
+						});
+				});
+		};
+		let fPersist = (pValidationWarning) =>
+		{
+			tmpSelf._meadowProxyRequest('configs-databeacon', 'POST',
+				'/1.0/platform-configs/OperationConfig', tmpRecord,
+				(pError, pResult) =>
+				{
+					if (pError && /UNIQUE constraint|duplicate/i.test(pError.message || ''))
+					{
+						return fUpdateExisting(pValidationWarning, pError);
+					}
+					if (pError) return fFail(502, pError.message || String(pError));
+					return fFinish(pResult, pValidationWarning);
+				});
+		};
+
+		if (tmpOptions.SkipValidation) return fPersist('Validation skipped.');
+
+		let tmpCfgErr = this._validateOperationConfiguration(tmpRecord);
+		if (tmpCfgErr) return fFail(400, tmpCfgErr.message);
+
+		this._validateAgainstTarget(tmpRecord, (pValidationErr, pWarning) =>
+		{
+			if (pValidationErr) return fFail(400, pValidationErr.message);
+			return fPersist(pWarning || null);
+		});
+	}
+
 	/**
 	 * Compile an OperationConfig into a UV Operation graph and register
 	 * it with UV. Mirrors the compile-then-POST path inside
