@@ -349,39 +349,81 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 				Password: tmpPassword
 			});
 
-		this._Client.authenticate((pError) =>
+		// A transient rejection here (UV mid-boot, the auth-beacon inside its
+		// reconnect backoff during a stack restart) previously left the
+		// dispatcher permanently sessionless — every later self-dispatch
+		// returned "Authentication required." until a manual restart. Retry
+		// with doubled backoff so stack restarts self-heal.
+		let tmpMaxAttempts = parseInt(process.env.DATA_MAPPER_CLIENT_AUTH_RETRIES, 10) || 5;
+		let tmpBackoffMs = parseInt(process.env.DATA_MAPPER_CLIENT_AUTH_BACKOFF_MS, 10) || 2000;
+		let tmpAttempt = 0;
+
+		let fAttemptAuth = () =>
 		{
-			if (pError)
+			tmpAttempt++;
+			this._Client.authenticate((pError) =>
 			{
-				this.log.error(`DataMapperBeaconProvider: client auth failed for [${tmpUserName}] — ${pError.message}`);
-				return fDone(pError);
-			}
-			let tmpCookie = (typeof this._Client.getSessionCookie === 'function') ? this._Client.getSessionCookie() : null;
-			if (!tmpCookie)
-			{
-				// Auth succeeded but UV sent no Set-Cookie header — every
-				// subsequent dispatch will 401 since the request can't
-				// carry a session.
-				this.log.warn(`DataMapperBeaconProvider: client authenticated as [${tmpUserName}] against ${pUltravisorURL} but UV returned no session cookie — dispatches will 401.`);
-			}
-			else
-			{
-				this.log.info(`DataMapperBeaconProvider: client authenticated as [${tmpUserName}] against ${pUltravisorURL} (session cookie set).`);
-			}
-			return fDone(null);
-		});
+				if (pError)
+				{
+					if (tmpAttempt < tmpMaxAttempts)
+					{
+						let tmpDelayMs = tmpBackoffMs;
+						tmpBackoffMs = tmpBackoffMs * 2;
+						this.log.warn(`DataMapperBeaconProvider: client auth attempt ${tmpAttempt}/${tmpMaxAttempts} failed for [${tmpUserName}] (${pError.message}); retrying in ${tmpDelayMs}ms.`);
+						return setTimeout(fAttemptAuth, tmpDelayMs);
+					}
+					this.log.error(`DataMapperBeaconProvider: client auth failed for [${tmpUserName}] — ${pError.message}`);
+					return fDone(pError);
+				}
+				let tmpCookie = (typeof this._Client.getSessionCookie === 'function') ? this._Client.getSessionCookie() : null;
+				if (!tmpCookie)
+				{
+					// Auth succeeded but UV sent no Set-Cookie header — every
+					// subsequent dispatch will 401 since the request can't
+					// carry a session.
+					this.log.warn(`DataMapperBeaconProvider: client authenticated as [${tmpUserName}] against ${pUltravisorURL} but UV returned no session cookie — dispatches will 401.`);
+				}
+				else
+				{
+					this.log.info(`DataMapperBeaconProvider: client authenticated as [${tmpUserName}] against ${pUltravisorURL} (session cookie set).`);
+				}
+				return fDone(null);
+			});
+		};
+		fAttemptAuth();
 	}
 
 	/**
 	 * Dispatch a work item to another beacon via the Ultravisor.
+	 *
+	 * A session can go stale under us (UV restart mints new session state) —
+	 * on "Authentication required." re-authenticate once and retry, so the
+	 * streaming ops self-heal instead of silently reporting Pulled:0 until a
+	 * mapper restart.
 	 */
-	_dispatch(pWorkItem, fCallback)
+	_dispatch(pWorkItem, fCallback, pIsRetry)
 	{
 		if (!this._Client)
 		{
 			return fCallback(new Error('DataMapperBeaconProvider: UltravisorClient not configured. Call configureClient() first.'));
 		}
-		this._Client.dispatch(pWorkItem, fCallback);
+		this._Client.dispatch(pWorkItem, (pError, pResult) =>
+		{
+			if (pError && !pIsRetry && /authentication required/i.test(pError.message || ''))
+			{
+				this.log.warn('DataMapperBeaconProvider: dispatch rejected with "Authentication required." — re-authenticating and retrying once.');
+				return this._Client.authenticate((pAuthError) =>
+				{
+					if (pAuthError)
+					{
+						this.log.error(`DataMapperBeaconProvider: re-authentication failed (${pAuthError.message}); surfacing the original dispatch failure.`);
+						return fCallback(pError);
+					}
+					return this._dispatch(pWorkItem, fCallback, true);
+				});
+			}
+			return fCallback(pError, pResult);
+		});
 	}
 
 	/**
@@ -467,6 +509,69 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											ConnectionHash: tmpOutputs.ConnectionHash || tmpBeaconName
 										},
 										Log: [`IntrospectSource: found ${tmpSchema.Tables.length} tables on beacon [${tmpBeaconName}].`]
+									});
+								});
+						}
+					}
+				}
+			});
+
+		// ── Capability: DataMapperManagement ─────────────────────
+		// Mesh-dispatchable definition management, so callers (e.g. the
+		// platform projection service) never need this service's REST
+		// surface: register-or-update an OperationConfig and receive the
+		// compiled UV operation hash to trigger runs with.
+
+		pBeaconService.registerCapability(
+			{
+				Capability: 'DataMapperManagement',
+				Name: 'DataMapperManagementProvider',
+				actions:
+				{
+					'RegisterOperation':
+					{
+						Description: 'Create-or-update an OperationConfig, compile it, and register the UV operation graph. Returns the CompiledOperationHash for UV-only triggering.',
+						SettingsSchema:
+						[
+							{ Name: 'OperationConfig', DataType: 'Object', Required: true, Description: 'The OperationConfig fields (Hash + OperationType required; OperationConfiguration is the per-type block)' },
+							{ Name: 'SkipValidation', DataType: 'Boolean', Required: false, Description: 'Skip per-type configuration + target validation' }
+						],
+						Handler: function (pWorkItem, pContext, fHandlerCallback)
+						{
+							let tmpSettings = pWorkItem.Settings || {};
+							let tmpConfig = tmpSettings.OperationConfig;
+							if (typeof tmpConfig === 'string')
+							{
+								try { tmpConfig = JSON.parse(tmpConfig); }
+								catch (pParseError) { return fHandlerCallback(new Error('RegisterOperation: OperationConfig is not valid JSON.')); }
+							}
+							if (!tmpConfig || typeof tmpConfig !== 'object')
+							{
+								return fHandlerCallback(new Error('RegisterOperation requires Settings.OperationConfig (object).'));
+							}
+							let tmpBridge = tmpSelf.fable.DataMapperConnectionBridge;
+							if (!tmpBridge)
+							{
+								return fHandlerCallback(new Error('RegisterOperation: ConnectionBridge service not available.'));
+							}
+							tmpBridge.registerOperationConfig(tmpConfig, { SkipValidation: !!tmpSettings.SkipValidation },
+								(pError, pResult) =>
+								{
+									if (pError) return fHandlerCallback(pError);
+									let tmpOperation = pResult.Operation || {};
+									return fHandlerCallback(null,
+									{
+										Outputs:
+										{
+											Success: true,
+											IDOperationConfig: tmpOperation.IDOperationConfig,
+											Hash: tmpOperation.Hash,
+											Scope: tmpOperation.Scope,
+											CompiledOperationHash: pResult.CompiledOperationHash,
+											ValidationWarning: pResult.ValidationWarning,
+											UVRegistration: pResult.UVRegistration
+										},
+										Log: [`RegisterOperation: [${tmpOperation.Hash}] stored as #${tmpOperation.IDOperationConfig}; compiled graph [${pResult.CompiledOperationHash || '(pending)'}].`]
 									});
 								});
 						}
@@ -2880,7 +2985,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 				}
 			});
 
-		this.log.info('DataMapperBeaconProvider: registered 3 capabilities (DataMapperSource, DataMapperRecords, DataMapperTransform) with 11 actions.');
+		this.log.info('DataMapperBeaconProvider: registered 4 capabilities (DataMapperSource, DataMapperManagement, DataMapperRecords, DataMapperTransform) with 12 actions.');
 	}
 }
 
