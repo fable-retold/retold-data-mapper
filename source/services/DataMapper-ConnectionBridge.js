@@ -2416,7 +2416,8 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 							GUIDName:     tmpGUIDName,
 							GUIDTemplate: tmpGUIDTemplate,
 							Projection:   tmpProjection,
-							Filter:       tmpFilter
+							Filter:       tmpFilter,
+							Solvers:      Array.isArray(tmpCfg.Solvers) ? tmpCfg.Solvers : []
 						}),
 						AffinityKey:  this._selfBeaconName(),
 						RequireAffinityMatch: true
