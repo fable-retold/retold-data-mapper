@@ -689,6 +689,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							// filter segment for the rest of the pull and keep
 							// going. Subsequent batches use the plain URL pattern.
 							let tmpUseSortFilter = !!tmpSortField;
+							let tmpBatchRetries = 0;
 
 							let fReadBatch = () =>
 							{
@@ -729,6 +730,22 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											tmpUseSortFilter = false;
 											return fReadBatch();
 										}
+										// retry, or propagate error, on pull failure
+										if (typeof (tmpStatus) === 'number' && tmpStatus >= 500)
+										{
+											if (tmpBatchRetries < 2)
+											{
+												tmpBatchRetries++;
+												tmpFable.log.warn(`PullRecords: HTTP ${tmpStatus} at offset ${tmpOffset} — retry ${tmpBatchRetries}/2 in ${tmpBatchRetries}s.`);
+												return setTimeout(fReadBatch, tmpBatchRetries * 1000);
+											}
+											return fHandlerCallback(null, {
+												Outputs: { Records: [], Pulled: tmpAllRecords.length, Errors: 1,
+													ErrorLog: [ { Offset: tmpOffset, Status: tmpStatus, Attempts: tmpBatchRetries + 1, Error: `source read failed: HTTP ${tmpStatus} at offset ${tmpOffset} after ${tmpBatchRetries + 1} attempts`, Body: String(tmpOutputs.Body || '').slice(0, 300) } ] },
+												Log: [`PullRecords: source returned HTTP ${tmpStatus} at offset ${tmpOffset} after ${tmpBatchRetries + 1} attempts — failing the pull (check SortField/route).`]
+											});
+										}
+										tmpBatchRetries = 0;
 										let tmpBody = tmpOutputs.Body;
 										if (typeof (tmpBody) === 'string')
 										{
