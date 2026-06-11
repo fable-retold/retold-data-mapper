@@ -141,3 +141,69 @@ suite('ExtractRecords graph-node config shape', function ()
 		libAssert.deepStrictEqual(tmpBundled.Solvers, [ 'X = ISNUMERIC(Record.ID)' ], 'Solvers must survive compilation into the node bundle');
 	});
 });
+
+suite('PullRecords source-error handling', function ()
+{
+	function buildPullHarness(pScript)
+	{
+		let tmpHandlers = {};
+		let tmpFable = new libPict({ Product: 'PullErrorTest', LogStreams: [ { streamtype: 'console', level: 'fatal' } ] });
+		tmpFable.serviceManager.addServiceType('DataMapperBeaconProvider', require('../source/services/DataMapper-BeaconProvider.js'));
+		let tmpProvider = tmpFable.serviceManager.instantiateServiceProvider('DataMapperBeaconProvider');
+		tmpProvider.registerCapabilities({ registerCapability: (pSpec) => { for (const k of Object.keys(pSpec.actions || {})) { tmpHandlers[pSpec.Capability + ':' + k] = pSpec.actions[k]; } } });
+		tmpProvider._Client = {};
+		tmpProvider._dispatch = (pWorkItem, fCallback) => fCallback(null, pScript(pWorkItem));
+		return tmpHandlers;
+	}
+
+	function pull(pHandlers)
+	{
+		return new Promise((fResolve) =>
+			pHandlers['DataMapperRecords:PullRecords'].Handler(
+				{ Settings: { SourceBeaconName: 'src', ConnectionHash: 'conn', Entity: 'Thing', BatchSize: 100 } }, {},
+				(pError, pResult) => fResolve({ Error: pError, Outputs: (pResult && pResult.Outputs) || {} })));
+	}
+
+	test('a 500 from the source FAILS the pull instead of reading an empty page', async function ()
+	{
+		this.timeout(8000);
+		const tmpHandlers = buildPullHarness(() => ({ Status: 500, Body: '{"Error":"Invalid column name ID Thing"}' }));
+		const tmpOutcome = await pull(tmpHandlers);
+		libAssert.strictEqual(tmpOutcome.Outputs.Errors, 1);
+		libAssert.match(tmpOutcome.Outputs.ErrorLog[0].Error, /HTTP 500/);
+		libAssert.strictEqual(tmpOutcome.Outputs.Pulled, 0);
+	});
+
+	test('a transient 500 is retried with backoff and the pull succeeds', async function ()
+	{
+		this.timeout(8000);
+		let tmpCalls = 0;
+		const tmpHandlers = buildPullHarness(() =>
+		{
+			tmpCalls++;
+			return (tmpCalls === 1)
+				? { Status: 500, Body: '{"Error":"pool exhausted"}' }
+				: { Status: 200, Body: '[]' };
+		});
+		const tmpOutcome = await pull(tmpHandlers);
+		libAssert.ok(!tmpOutcome.Outputs.Errors, 'retry recovered the pull');
+		libAssert.strictEqual(tmpCalls, 2, 'exactly one retry was needed');
+	});
+
+	test('a persistent 500 fails after bounded retries with attempts recorded', async function ()
+	{
+		this.timeout(8000);
+		const tmpHandlers = buildPullHarness(() => ({ Status: 500, Body: '{"Error":"Invalid column name"}' }));
+		const tmpOutcome = await pull(tmpHandlers);
+		libAssert.strictEqual(tmpOutcome.Outputs.Errors, 1);
+		libAssert.strictEqual(tmpOutcome.Outputs.ErrorLog[0].Attempts, 3);
+	});
+
+	test('a genuinely empty source still reads as zero rows successfully', async function ()
+	{
+		const tmpHandlers = buildPullHarness(() => ({ Status: 200, Body: '[]' }));
+		const tmpOutcome = await pull(tmpHandlers);
+		libAssert.strictEqual(tmpOutcome.Error, null);
+		libAssert.ok(!tmpOutcome.Outputs.Errors, 'no error for a real empty result');
+	});
+});
