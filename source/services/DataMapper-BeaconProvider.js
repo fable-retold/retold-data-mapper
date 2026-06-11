@@ -2332,6 +2332,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpSettings = pWorkItem.Settings || {};
 							let tmpRecords = tmpSettings.Records || [];
 							let tmpCfg = tmpSettings.OperationConfiguration || {};
+							if (typeof (tmpCfg) === 'string') { try { tmpCfg = JSON.parse(tmpCfg); } catch (pCfgParseError) { tmpCfg = {}; } }
 
 							if (typeof (tmpRecords) === 'string')
 							{
