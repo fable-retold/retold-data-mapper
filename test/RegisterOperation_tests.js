@@ -64,6 +64,33 @@ suite('ConnectionBridge.registerOperationConfig', function ()
 		libAssert.strictEqual(tmpLedger.registrations.length, 1);
 	});
 
+	test('Aggregation accepts CollectDistinct/CountDistinct and still rejects unknown functions', async function ()
+	{
+		const tmpLedger = { stores: [], registrations: [] };
+		const tmpBody = {
+			Hash: 'agg-collect-test', Name: 'AggCollect', OperationType: 'Aggregation',
+			SourceBeaconName: 'lake', SourceConnectionHash: 'lake', SourceEntity: 'Facts',
+			TargetBeaconName: 'lake', TargetConnectionHash: 'lake', TargetEntity: 'Daily', TargetTable: 'Daily',
+			OperationConfiguration: {
+				Entity: 'Daily', GroupBy: ['Day'],
+				Aggregates: [
+					{ Source: 'V', Function: 'Sum', As: 'Total' },
+					{ Source: 'IDDocument', Function: 'CollectDistinct', As: 'IDDocuments' },
+					{ Source: 'IDDocument', Function: 'CountDistinct', As: 'IDDocumentCount' }
+				]
+			}
+		};
+		const tmpOutcome = await register(buildBridge(tmpLedger).bridge, tmpBody);
+		libAssert.strictEqual(tmpOutcome.Error, null, 'provenance aggregates accepted');
+
+		const tmpBad = JSON.parse(JSON.stringify(tmpBody));
+		tmpBad.Hash = 'agg-bad-test';
+		tmpBad.OperationConfiguration.Aggregates.push({ Source: 'V', Function: 'Median', As: 'Nope' });
+		const tmpRejected = await register(buildBridge({ stores: [], registrations: [] }).bridge, tmpBad);
+		libAssert.strictEqual(tmpRejected.Error.StatusCode, 400);
+		libAssert.ok(/CollectDistinct/.test(tmpRejected.Error.message), 'error message advertises the full list');
+	});
+
 	test('missing Hash / OperationType fail with StatusCode 400', async function ()
 	{
 		const tmpBridge = buildBridge({ stores: [], registrations: [] }).bridge;

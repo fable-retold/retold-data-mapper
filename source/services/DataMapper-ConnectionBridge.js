@@ -3340,9 +3340,9 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				{
 					let tmpA = tmpCfg.Aggregates[i] || {};
 					let tmpFn = String(tmpA.Function || tmpA.Op || '').toLowerCase();
-					if (!['sum', 'count', 'mean', 'avg', 'average', 'min', 'max'].includes(tmpFn))
+					if (!['sum', 'count', 'mean', 'avg', 'average', 'min', 'max', 'collectdistinct', 'countdistinct'].includes(tmpFn))
 					{
-						return new Error('Aggregates[' + i + '].Function must be one of Sum|Count|Mean|Min|Max (got "' + (tmpA.Function || tmpA.Op || '') + '").');
+						return new Error('Aggregates[' + i + '].Function must be one of Sum|Count|Mean|Min|Max|CollectDistinct|CountDistinct (got "' + (tmpA.Function || tmpA.Op || '') + '").');
 					}
 					if (!tmpA.As) return new Error('Aggregates[' + i + '].As is required (target column name).');
 				}
