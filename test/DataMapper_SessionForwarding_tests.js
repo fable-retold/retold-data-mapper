@@ -15,7 +15,7 @@ const libAssert = require('assert');
 const libConnectionBridge = require('../source/services/DataMapper-ConnectionBridge.js');
 const libBeaconProvider = require('../source/services/DataMapper-BeaconProvider.js');
 
-const SESSION_TEMPLATE = '{~D:Record.OperationState.Session~}';
+const SESSION_TEMPLATE = '{~D:Record.Operation.Session~}';
 
 function injectInto(pGraph)
 {
