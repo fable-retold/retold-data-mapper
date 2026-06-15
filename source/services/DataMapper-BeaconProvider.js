@@ -323,7 +323,7 @@ function _buildSortFilter(pSortField)
 /**
  * Normalize a forwarded run session into a clean session id, or '' when
  * absent. Guards the two non-identity cases: an empty value (no session
- * triggered) and an UNRESOLVED template (the `{~D:Record.OperationState.Session~}`
+ * triggered) and an UNRESOLVED template (the `{~D:Record.Operation.Session~}`
  * reference left literal because no Parameters.Session was supplied). Either
  * way the caller forwards '' so the source beacon uses its bound session.
  *
@@ -658,7 +658,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'BatchSize', DataType: 'Number', Required: false, Description: 'Records per page (default 100)' },
 							{ Name: 'FilterExpression', DataType: 'String', Required: false, Description: 'Meadow filter (e.g. FBV~Field~EQ~Value); spliced into URL as /FilteredTo/<expr>' },
 							{ Name: 'SortField', DataType: 'String', Required: false, Description: 'Column to ORDER BY for stable pagination. Defaults to "ID<Entity>" — meadow\'s standard auto-identity convention. Postgres without ORDER BY can return the same row on multiple pages once the table outgrows a single seq-scan window, which silently truncates pulled data; explicit sort fixes that.' },
-							// String so the engine resolves the OperationState.Session
+							// String so the engine resolves the Operation.Session
 							// template into the run's forwarded session id.
 							{ Name: 'Session', DataType: 'String', Required: false, Description: 'Forwarded caller session id for per-run row-auth (resolved from the trigger\'s Parameters.Session). Empty → the source beacon\'s bound session.' }
 						],

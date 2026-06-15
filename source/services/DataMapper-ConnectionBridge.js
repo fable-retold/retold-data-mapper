@@ -2233,9 +2233,11 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	/**
 	 * Stamp a per-run session reference onto every beacon node's Data so the
 	 * node's handler can forward the caller's identity to the beacon it talks
-	 * to. The value is a String template resolved at run time against
-	 * OperationState.Session — which Ultravisor seeds from the trigger's
-	 * `Parameters.Session`. When no session is triggered the template resolves
+	 * to. The value is a String template resolved at run time against the
+	 * operation state (`Operation.Session` in the StateManager's address
+	 * grammar — `Operation.X` resolves OperationState.X), which Ultravisor
+	 * seeds from the trigger's `Parameters.Session`. When no session is
+	 * triggered the template resolves
 	 * empty and handlers fall back to the beacon's bound session. Beacon nodes
 	 * are identified by an `AffinityKey` in their Data (transform nodes have
 	 * none, so they are left untouched).
@@ -2255,7 +2257,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			if (tmpNode && tmpNode.Data && typeof tmpNode.Data === 'object'
 				&& Object.prototype.hasOwnProperty.call(tmpNode.Data, 'AffinityKey'))
 			{
-				tmpNode.Data.Session = '{~D:Record.OperationState.Session~}';
+				tmpNode.Data.Session = '{~D:Record.Operation.Session~}';
 			}
 		}
 	}
@@ -3693,6 +3695,12 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 		{
 			return fCallback(null, { Compiled: false, Reason: 'Compile failed: ' + pErr.message });
 		}
+		// Thread per-run caller identity into every beacon node — the mesh
+		// RegisterOperation path (the runner's zero-REST contract) compiles here,
+		// so it needs the same session stamp as the REST /Operation path. Without
+		// this, runner-triggered graphs forward no session and reads fall back to
+		// the beacon's bound identity.
+		this._injectRunSessionTemplate(tmpGraph);
 		let tmpCfgHash = this._hashOperationConfig(pOperation);
 		if (pOperation.CompiledOperationConfigHash === tmpCfgHash && pOperation.CompiledOperationHash)
 		{
