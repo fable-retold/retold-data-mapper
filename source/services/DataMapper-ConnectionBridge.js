@@ -1882,6 +1882,13 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 							return _self._sendError(pResponse, 501, tmpDispatchErr, fNext);
 						}
 
+						// Thread per-run caller identity into every beacon node so
+						// reads/writes against a remote-fronting beacon act under the
+						// run's session (forwarded by the trigger's Parameters.Session
+						// → OperationState → this template). Identical for every
+						// compile, so it does not perturb the graph cache hash.
+						_self._injectRunSessionTemplate(tmpGraph);
+
 						// Graph caching: if the OperationConfiguration hash
 						// matches what we previously stored on the
 						// OperationConfig row, skip re-registering the
@@ -2223,6 +2230,36 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	 * combinatorial GUID in the MappingConfiguration's GUIDTemplate is
 	 * what ties source rows to their lake-side identity.
 	 */
+	/**
+	 * Stamp a per-run session reference onto every beacon node's Data so the
+	 * node's handler can forward the caller's identity to the beacon it talks
+	 * to. The value is a String template resolved at run time against
+	 * OperationState.Session — which Ultravisor seeds from the trigger's
+	 * `Parameters.Session`. When no session is triggered the template resolves
+	 * empty and handlers fall back to the beacon's bound session. Beacon nodes
+	 * are identified by an `AffinityKey` in their Data (transform nodes have
+	 * none, so they are left untouched).
+	 *
+	 * @param {object} pGraph - a compiled operation graph ({ Graph: { Nodes } })
+	 * @returns {void}
+	 */
+	_injectRunSessionTemplate(pGraph)
+	{
+		if (!pGraph || !pGraph.Graph || !Array.isArray(pGraph.Graph.Nodes))
+		{
+			return;
+		}
+		for (let i = 0; i < pGraph.Graph.Nodes.length; i++)
+		{
+			let tmpNode = pGraph.Graph.Nodes[i];
+			if (tmpNode && tmpNode.Data && typeof tmpNode.Data === 'object'
+				&& Object.prototype.hasOwnProperty.call(tmpNode.Data, 'AffinityKey'))
+			{
+				tmpNode.Data.Session = '{~D:Record.OperationState.Session~}';
+			}
+		}
+	}
+
 	_compileMappingToOperation(pMapping)
 	{
 		let tmpMC = pMapping.MappingConfiguration || {};
