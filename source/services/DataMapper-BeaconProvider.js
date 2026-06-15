@@ -320,6 +320,29 @@ function _buildSortFilter(pSortField)
 		.join('~');
 }
 
+/**
+ * Normalize a forwarded run session into a clean session id, or '' when
+ * absent. Guards the two non-identity cases: an empty value (no session
+ * triggered) and an UNRESOLVED template (the `{~D:Record.OperationState.Session~}`
+ * reference left literal because no Parameters.Session was supplied). Either
+ * way the caller forwards '' so the source beacon uses its bound session.
+ *
+ * @param {*} pSession - the (possibly template-resolved) Session setting value
+ * @returns {string} a session id, or '' to mean "no forwarded identity"
+ */
+function _sanitizeForwardSession(pSession)
+{
+	if (typeof pSession !== 'string')
+	{
+		return '';
+	}
+	if (pSession.length < 1 || pSession.indexOf('{~') !== -1)
+	{
+		return '';
+	}
+	return pSession;
+}
+
 let libTabularTransform = null;
 try
 {
@@ -634,7 +657,10 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'Entity', DataType: 'String', Required: true, Description: 'Entity/table name to read' },
 							{ Name: 'BatchSize', DataType: 'Number', Required: false, Description: 'Records per page (default 100)' },
 							{ Name: 'FilterExpression', DataType: 'String', Required: false, Description: 'Meadow filter (e.g. FBV~Field~EQ~Value); spliced into URL as /FilteredTo/<expr>' },
-							{ Name: 'SortField', DataType: 'String', Required: false, Description: 'Column to ORDER BY for stable pagination. Defaults to "ID<Entity>" — meadow\'s standard auto-identity convention. Postgres without ORDER BY can return the same row on multiple pages once the table outgrows a single seq-scan window, which silently truncates pulled data; explicit sort fixes that.' }
+							{ Name: 'SortField', DataType: 'String', Required: false, Description: 'Column to ORDER BY for stable pagination. Defaults to "ID<Entity>" — meadow\'s standard auto-identity convention. Postgres without ORDER BY can return the same row on multiple pages once the table outgrows a single seq-scan window, which silently truncates pulled data; explicit sort fixes that.' },
+							// String so the engine resolves the OperationState.Session
+							// template into the run's forwarded session id.
+							{ Name: 'Session', DataType: 'String', Required: false, Description: 'Forwarded caller session id for per-run row-auth (resolved from the trigger\'s Parameters.Session). Empty → the source beacon\'s bound session.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback, fReportProgress)
 						{
@@ -644,6 +670,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpConnectionHash = tmpSettings.ConnectionHash;
 							let tmpEntity = tmpSettings.Entity;
 							let tmpBatchSize = tmpSettings.BatchSize || 500;
+							let tmpForwardSession = _sanitizeForwardSession(tmpSettings.Session);
 
 							// Stable-pagination guard. Without an explicit sort,
 							// postgres LIMIT/OFFSET against a 250K-row table
@@ -704,7 +731,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										Capability: 'MeadowProxy',
 										Action: 'Request',
-										Settings: { Method: 'GET', Path: tmpPath, Body: '', RemoteUser: '' },
+										Settings: { Method: 'GET', Path: tmpPath, Body: '', RemoteUser: '', Session: tmpForwardSession },
 										AffinityKey: tmpBeaconName,
 										RequireAffinityMatch: true,
 										TimeoutMs: 30000
@@ -3075,5 +3102,6 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 module.exports = DataMapperBeaconProvider;
 // Exposed for unit testing — pure helper, no instance state.
 module.exports._buildSortFilter = _buildSortFilter;
+module.exports._sanitizeForwardSession = _sanitizeForwardSession;
 module.exports._unnestRecordsHandler = _unnestRecordsHandler;
 module.exports._unnestGetByPath = _unnestGetByPath;
