@@ -22,7 +22,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 NAME=$(node -p "require('./package.json').name")
-REGISTRY="${PUBLISH_REGISTRY:-ghcr.io/stevenvelozo}"
+REGISTRY="${PUBLISH_REGISTRY:-ghcr.io/fable-retold}"
 SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "no-git")
 TAG="${PUBLISH_TAG:-dev-${SHA}}"
 PLATFORMS="${PUBLISH_PLATFORMS:-linux/amd64}"
