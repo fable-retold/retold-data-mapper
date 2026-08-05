@@ -343,6 +343,87 @@ function _sanitizeForwardSession(pSession)
 	return pSession;
 }
 
+// Transport-level failures a bulk /Upserts chunk can be safely replayed
+// through. A database container restarting under a long write (image
+// auto-update, failover) leaves the target beacon's connection pool holding
+// dead sockets, which surface as scattered resets minutes after the restart
+// as each stale connection is next picked up — every one of them a chunk
+// that never applied, or applied and lost only its response.
+//
+// Deliberately narrow: a row rejected for a bad value is NOT in here, and
+// neither is a 4xx. Those are data failures and replaying them just burns
+// the same error three times.
+const RETRYABLE_TRANSPORT_CODES = ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNABORTED', 'ESOCKETTIMEDOUT'];
+const RETRYABLE_HTTP_STATUSES = [502, 503, 504];
+
+/**
+ * Decide whether a failed bulk-write chunk is worth another attempt.
+ *
+ * @param {string} pErrorMessage - the dispatch error message, or a synthesized 'HTTP <status>: <body>' string
+ * @param {number} [pStatus] - the HTTP status when the request reached the server, 0/undefined for a transport failure
+ * @return {boolean} true when the failure is transport-level and the chunk can be replayed
+ */
+function _isRetryableWriteFailure(pErrorMessage, pStatus)
+{
+	if (typeof pStatus === 'number' && pStatus > 0)
+	{
+		return RETRYABLE_HTTP_STATUSES.indexOf(pStatus) !== -1;
+	}
+	if (typeof pErrorMessage !== 'string' || pErrorMessage.length < 1)
+	{
+		return false;
+	}
+	let tmpMessage = pErrorMessage.toUpperCase();
+	for (let i = 0; i < RETRYABLE_TRANSPORT_CODES.length; i++)
+	{
+		if (tmpMessage.indexOf(RETRYABLE_TRANSPORT_CODES[i]) !== -1)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Is every row in this chunk safe to write a second time?
+ *
+ * meadow's Upsert takes the UPDATE path when a record carries EITHER key —
+ * a non-empty string GUID<Entity> or a positive ID<Entity> (Meadow-Operation-
+ * Upsert.js). Anything else is create-only, and since a reset while reading
+ * the response can follow a fully applied request, replaying a create-only
+ * chunk turns a lossy write into a silently duplicating one.
+ *
+ * The predicates below mirror meadow's exactly (`.length > 0` on the GUID,
+ * `> 0` on the ID) so this guard can never disagree with the engine about
+ * what will match.
+ *
+ * @param {object[]} pChunk - the records in the chunk
+ * @param {string} pEntity - target entity name; the upsert keys are 'GUID' + pEntity and 'ID' + pEntity
+ * @return {boolean} true only when EVERY row will match an existing row on replay
+ */
+function _isChunkReplaySafe(pChunk, pEntity)
+{
+	let tmpGUIDKey = 'GUID' + pEntity;
+	let tmpIDKey = 'ID' + pEntity;
+	for (let i = 0; i < pChunk.length; i++)
+	{
+		let tmpRow = pChunk[i];
+		if (!tmpRow)
+		{
+			return false;
+		}
+		let tmpGUIDValue = tmpRow[tmpGUIDKey];
+		let tmpHasGUID = (typeof (tmpGUIDValue) === 'string') && (tmpGUIDValue.length > 0);
+		let tmpIDValue = tmpRow[tmpIDKey];
+		let tmpHasID = (tmpIDValue !== undefined) && (tmpIDValue !== null) && (tmpIDValue > 0);
+		if (!tmpHasGUID && !tmpHasID)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 let libTabularTransform = null;
 try
 {
@@ -1791,7 +1872,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 					},
 					'WriteRecords':
 					{
-						Description: 'Push a comprehension to a target beacon entity using meadow-endpoints bulk Upserts (PUT /<Entity>s/Upserts), routed through the UV mesh by AffinityKey=TargetBeaconName.',
+						Description: 'Push a comprehension to a target beacon entity using meadow-endpoints bulk Upserts (PUT /<Entity>s/Upserts), routed through the UV mesh by AffinityKey=TargetBeaconName. A chunk that fails at the transport layer (ECONNRESET/ETIMEDOUT/EPIPE/… or 502/503/504) is retried with backoff — DATA_MAPPER_WRITE_RETRY_ATTEMPTS (default 3) and DATA_MAPPER_WRITE_RETRY_BACKOFF_MS (default 500, quadrupling) — but only when every row in the chunk carries a key meadow will match on — a non-empty GUID<Entity> or a positive ID<Entity> — since without one a replay INSERTs instead of upserting. Outputs.ChunksRetried / ChunksRecovered report when this happened. Data-level failures (4xx, per-row errors) are never retried.',
 						SettingsSchema:
 						[
 							{ Name: 'TargetBeaconName', DataType: 'String', Required: true, Description: 'Beacon name of the target (UV mesh AffinityKey).' },
@@ -1861,6 +1942,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpEntitiesWritten = [];
 							let tmpEntityCounts = {};
 							let tmpEntitiesPurgeSkipped = [];
+							// A chunk that only succeeded on a retry is the signal
+							// that the target went away mid-write. Silently
+							// recovering from that and reporting a clean run hides
+							// an infrastructure event worth knowing about.
+							let tmpChunksRecovered = { Recovered: 0, Exhausted: 0 };
+							// 3 attempts at 500ms/2s/8s spans ~10.5s of outage —
+							// enough to ride out a database container restart,
+							// which is the failure this exists for.
+							let tmpMaxWriteAttempts = Math.max(1, parseInt(process.env.DATA_MAPPER_WRITE_RETRY_ATTEMPTS, 10) || 3);
+							let tmpRetryBackoffMs = Math.max(1, parseInt(process.env.DATA_MAPPER_WRITE_RETRY_BACKOFF_MS, 10) || 500);
 
 							let fNextEntity = () =>
 							{
@@ -1897,10 +1988,19 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										tmpOutputs.PurgeSkipped = tmpEntitiesPurgeSkipped;
 									}
+									if (tmpChunksRecovered.Recovered > 0 || tmpChunksRecovered.Exhausted > 0)
+									{
+										tmpOutputs.ChunksRetried  = tmpChunksRecovered.Recovered + tmpChunksRecovered.Exhausted;
+										tmpOutputs.ChunksRecovered = tmpChunksRecovered.Recovered;
+									}
 									let tmpLog = [`WriteRecords (Upsert → ${tmpBeaconName}/${tmpConnHash}): ${tmpTotalWritten} written across ${tmpEntitiesWritten.length} entity(ies), ${tmpTotalErrors} errors${tmpTotalOrphansDeleted ? ', ' + tmpTotalOrphansDeleted + ' orphans purged' : ''}, in ${tmpElapsedMs}ms.`];
 									if (tmpEntitiesPurgeSkipped.length > 0)
 									{
 										tmpLog.push(`WriteRecords[Replace]: orphan purge SKIPPED for entity(ies) [${tmpEntitiesPurgeSkipped.join(', ')}] — see ErrorLog. Stale rows remain in the target.`);
+									}
+									if (tmpChunksRecovered.Recovered > 0 || tmpChunksRecovered.Exhausted > 0)
+									{
+										tmpLog.push(`WriteRecords: ${tmpChunksRecovered.Recovered} chunk(s) recovered on retry, ${tmpChunksRecovered.Exhausted} still failing after ${tmpMaxWriteAttempts} attempts — the target was unreachable for part of this write.`);
 									}
 									if (tmpTotalWritten > 0 && tmpTotalOrphansDeleted >= tmpTotalWritten)
 									{
@@ -2160,125 +2260,188 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									tmpChunkOffset += tmpChunkLen;
 									let tmpBodyStr = JSON.stringify(tmpChunk);
 									tmpInFlight++;
+									// Attempt counter and replay-safety verdict are
+									// per-chunk; the verdict is computed lazily so
+									// the happy path never pays for it.
+									let tmpChunkAttempt = 0;
+									let tmpChunkReplaySafe = null;
 
-									tmpSelf._dispatch(
-										{
-											Capability: 'MeadowProxy',
-											Action:     'Request',
-											Settings:
+									let fAttemptChunk = () =>
+									{
+										tmpChunkAttempt++;
+										tmpSelf._dispatch(
 											{
-												Method:     'PUT',
-												Path:       tmpPath,
-												Body:       tmpBodyStr,
-												RemoteUser: ''
-											},
-											AffinityKey: tmpBeaconName,
-											RequireAffinityMatch: true,
-											TimeoutMs:   60000
-										},
-										(pErr, pResult) =>
-										{
-											if (pErr)
-											{
-												tmpEntityErrors += tmpChunkLen;
-												tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpStart, Error: pErr.message || String(pErr) });
-											}
-											else
-											{
-												let tmpOut = (pResult && pResult.Outputs) || {};
-												let tmpStatus = tmpOut.Status;
-												if (typeof (tmpStatus) === 'number' && tmpStatus >= 400)
+												Capability: 'MeadowProxy',
+												Action:     'Request',
+												Settings:
 												{
-													tmpEntityErrors += tmpChunkLen;
-													let tmpSnippet = (typeof tmpOut.Body === 'string') ? tmpOut.Body.slice(0, 160) : '';
-													tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpStart, Error: `HTTP ${tmpStatus}: ${tmpSnippet}` });
+													Method:     'PUT',
+													Path:       tmpPath,
+													Body:       tmpBodyStr,
+													RemoteUser: ''
+												},
+												AffinityKey: tmpBeaconName,
+												RequireAffinityMatch: true,
+												TimeoutMs:   60000
+											},
+											(pErr, pResult) =>
+											{
+												// Classify first: a chunk that failed at
+												// the transport layer (or with a gateway
+												// status) never applied its rows, or lost
+												// only its response — either way replaying
+												// it converges, so long as the rows carry
+												// the upsert key.
+												let tmpFailureMessage = '';
+												let tmpFailureStatus = 0;
+												if (pErr)
+												{
+													tmpFailureMessage = pErr.message || String(pErr);
 												}
 												else
 												{
-													// meadow's bulk Upserts returns HTTP 200
-													// even when every row in the chunk fails
-													// (postgres type errors, missing table, NOT
-													// NULL violations, etc.). The authoritative
-													// per-row totals are in HTTP HEADERS:
-													//   X-Meadow-Upsert-Total
-													//   X-Meadow-Upsert-Succeeded
-													//   X-Meadow-Upsert-Errored
-													// without these, we'd silently report
-													// "Written: 25000" while the table stays empty.
-													// MeadowProxy forwards response headers into
-													// Outputs.Headers (lowercased keys, per Node http).
-													let tmpHeaders = (tmpOut.Headers) || {};
-													let tmpHdrTotal      = parseInt(tmpHeaders['x-meadow-upsert-total']     || tmpHeaders['X-Meadow-Upsert-Total']     || '-1', 10);
-													let tmpHdrSucceeded  = parseInt(tmpHeaders['x-meadow-upsert-succeeded'] || tmpHeaders['X-Meadow-Upsert-Succeeded'] || '-1', 10);
-													let tmpHdrErrored    = parseInt(tmpHeaders['x-meadow-upsert-errored']   || tmpHeaders['X-Meadow-Upsert-Errored']   || '-1', 10);
+													let tmpProbeOut = (pResult && pResult.Outputs) || {};
+													let tmpProbeStatus = tmpProbeOut.Status;
+													if (typeof (tmpProbeStatus) === 'number' && tmpProbeStatus >= 400)
+													{
+														tmpFailureStatus = tmpProbeStatus;
+														let tmpProbeSnippet = (typeof tmpProbeOut.Body === 'string') ? tmpProbeOut.Body.slice(0, 160) : '';
+														tmpFailureMessage = `HTTP ${tmpProbeStatus}: ${tmpProbeSnippet}`;
+													}
+												}
 
-													let tmpBody = tmpOut.Body;
-													if (typeof tmpBody === 'string')
+												if (tmpFailureMessage && tmpChunkAttempt < tmpMaxWriteAttempts && _isRetryableWriteFailure(tmpFailureMessage, tmpFailureStatus))
+												{
+													if (tmpChunkReplaySafe === null)
 													{
-														try { tmpBody = JSON.parse(tmpBody); }
-														catch (pParseIgn) { /* leave as string for fallback */ }
+														tmpChunkReplaySafe = _isChunkReplaySafe(tmpChunk, tmpEntity);
+														if (!tmpChunkReplaySafe)
+														{
+															tmpFable.log.warn(`WriteRecords: chunk ${tmpStart} of [${tmpEntity}] hit a retryable failure (${tmpFailureMessage}) but its rows carry neither 'GUID${tmpEntity}' nor a positive 'ID${tmpEntity}' — meadow would INSERT rather than match, so replaying could duplicate and it is NOT retried.`);
+														}
 													}
-													let tmpFirstErrors = [];
-													if (tmpBody && typeof tmpBody === 'object' && Array.isArray(tmpBody.Errors))
+													if (tmpChunkReplaySafe)
 													{
-														tmpFirstErrors = tmpBody.Errors.slice(0, 3).map((pE) => (pE && (pE.Error || pE.Message || JSON.stringify(pE).slice(0, 200))));
+														let tmpDelayMs = tmpRetryBackoffMs * Math.pow(4, tmpChunkAttempt - 1);
+														tmpFable.log.warn(`WriteRecords: chunk ${tmpStart} of [${tmpEntity}] failed (${tmpFailureMessage}); retrying in ${tmpDelayMs}ms (attempt ${tmpChunkAttempt + 1}/${tmpMaxWriteAttempts}).`);
+														// Keep the heartbeat alive across
+														// the backoff so UV's stall detector
+														// doesn't flip a recovering write.
+														if (typeof fReportProgress === 'function')
+														{
+															try { fReportProgress({ Phase: 'retrying', Entity: tmpEntity, Chunk: tmpStart, Attempt: tmpChunkAttempt, Written: tmpEntityWritten, Errors: tmpEntityErrors }); }
+															catch (pProgErr) { /* best-effort */ }
+														}
+														return setTimeout(fAttemptChunk, tmpDelayMs);
 													}
+												}
 
-													let tmpRowSucceeded;
-													let tmpRowErrored;
-													if (tmpHdrSucceeded >= 0 && tmpHdrErrored >= 0)
+												if (pErr)
+												{
+													tmpEntityErrors += tmpChunkLen;
+													tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpStart, Error: pErr.message || String(pErr), Attempts: tmpChunkAttempt });
+													if (tmpChunkAttempt > 1) tmpChunksRecovered.Exhausted++;
+												}
+												else
+												{
+													let tmpOut = (pResult && pResult.Outputs) || {};
+													let tmpStatus = tmpOut.Status;
+													if (typeof (tmpStatus) === 'number' && tmpStatus >= 400)
 													{
-														// Headers tell the truth — use them.
-														tmpRowSucceeded = tmpHdrSucceeded;
-														tmpRowErrored   = tmpHdrErrored;
-													}
-													else if (tmpBody && typeof tmpBody === 'object')
-													{
-														// No headers (older meadow?) — try the body.
-														tmpRowErrored   = Array.isArray(tmpBody.Errors)  ? tmpBody.Errors.length  : 0;
-														tmpRowSucceeded = Array.isArray(tmpBody.Records) ? tmpBody.Records.length
-															: (Array.isArray(tmpBody) ? tmpBody.length : Math.max(0, tmpChunkLen - tmpRowErrored));
+														tmpEntityErrors += tmpChunkLen;
+														let tmpSnippet = (typeof tmpOut.Body === 'string') ? tmpOut.Body.slice(0, 160) : '';
+														tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpStart, Error: `HTTP ${tmpStatus}: ${tmpSnippet}`, Attempts: tmpChunkAttempt });
+														if (tmpChunkAttempt > 1) tmpChunksRecovered.Exhausted++;
 													}
 													else
 													{
-														// Truly opaque — assume the chunk wrote.
-														tmpRowSucceeded = tmpChunkLen;
-														tmpRowErrored   = 0;
-													}
+														if (tmpChunkAttempt > 1) tmpChunksRecovered.Recovered++;
+														// meadow's bulk Upserts returns HTTP 200
+														// even when every row in the chunk fails
+														// (postgres type errors, missing table, NOT
+														// NULL violations, etc.). The authoritative
+														// per-row totals are in HTTP HEADERS:
+														//   X-Meadow-Upsert-Total
+														//   X-Meadow-Upsert-Succeeded
+														//   X-Meadow-Upsert-Errored
+														// without these, we'd silently report
+														// "Written: 25000" while the table stays empty.
+														// MeadowProxy forwards response headers into
+														// Outputs.Headers (lowercased keys, per Node http).
+														let tmpHeaders = (tmpOut.Headers) || {};
+														let tmpHdrTotal      = parseInt(tmpHeaders['x-meadow-upsert-total']     || tmpHeaders['X-Meadow-Upsert-Total']     || '-1', 10);
+														let tmpHdrSucceeded  = parseInt(tmpHeaders['x-meadow-upsert-succeeded'] || tmpHeaders['X-Meadow-Upsert-Succeeded'] || '-1', 10);
+														let tmpHdrErrored    = parseInt(tmpHeaders['x-meadow-upsert-errored']   || tmpHeaders['X-Meadow-Upsert-Errored']   || '-1', 10);
 
-													if (tmpRowErrored > 0)
-													{
-														tmpEntityErrors += tmpRowErrored;
-														tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpStart, Error: `${tmpRowErrored}/${tmpChunkLen} rows errored`, Details: tmpFirstErrors });
+														let tmpBody = tmpOut.Body;
+														if (typeof tmpBody === 'string')
+														{
+															try { tmpBody = JSON.parse(tmpBody); }
+															catch (pParseIgn) { /* leave as string for fallback */ }
+														}
+														let tmpFirstErrors = [];
+														if (tmpBody && typeof tmpBody === 'object' && Array.isArray(tmpBody.Errors))
+														{
+															tmpFirstErrors = tmpBody.Errors.slice(0, 3).map((pE) => (pE && (pE.Error || pE.Message || JSON.stringify(pE).slice(0, 200))));
+														}
+
+														let tmpRowSucceeded;
+														let tmpRowErrored;
+														if (tmpHdrSucceeded >= 0 && tmpHdrErrored >= 0)
+														{
+															// Headers tell the truth — use them.
+															tmpRowSucceeded = tmpHdrSucceeded;
+															tmpRowErrored   = tmpHdrErrored;
+														}
+														else if (tmpBody && typeof tmpBody === 'object')
+														{
+															// No headers (older meadow?) — try the body.
+															tmpRowErrored   = Array.isArray(tmpBody.Errors)  ? tmpBody.Errors.length  : 0;
+															tmpRowSucceeded = Array.isArray(tmpBody.Records) ? tmpBody.Records.length
+																: (Array.isArray(tmpBody) ? tmpBody.length : Math.max(0, tmpChunkLen - tmpRowErrored));
+														}
+														else
+														{
+															// Truly opaque — assume the chunk wrote.
+															tmpRowSucceeded = tmpChunkLen;
+															tmpRowErrored   = 0;
+														}
+
+														if (tmpRowErrored > 0)
+														{
+															tmpEntityErrors += tmpRowErrored;
+															tmpErrorLog.push({ Entity: tmpEntity, Chunk: tmpStart, Error: `${tmpRowErrored}/${tmpChunkLen} rows errored`, Details: tmpFirstErrors });
+														}
+														if (tmpRowSucceeded > 0) tmpEntityWritten += tmpRowSucceeded;
 													}
-													if (tmpRowSucceeded > 0) tmpEntityWritten += tmpRowSucceeded;
 												}
-											}
-											// Heartbeat per-chunk so UV's stall detector
-											// (HeartbeatExpectedMs * 2 = 120s default)
-											// doesn't flip a long bulk-write to Stalled.
-											// At 250K rows / 500 per chunk = 500 chunks;
-											// even at 5-way concurrency the wall-clock
-											// can run several minutes total.
-											if (typeof fReportProgress === 'function')
-											{
-												try { fReportProgress({ Phase: 'writing', Entity: tmpEntity, Written: tmpEntityWritten, Errors: tmpEntityErrors }); }
-												catch (pProgErr) { /* best-effort */ }
-											}
-											tmpInFlight--;
-											// Refill the worker pool: try to start a
-											// fresh chunk to replace this one. If
-											// no more work AND nothing in flight,
-											// we're done.
-											if (tmpChunkOffset < tmpRowArr.length)
-											{
-												fStartNextChunk();
-											}
-											else if (tmpInFlight === 0)
-											{
-												fSignalEntityDone();
-											}
-										});
+												// Heartbeat per-chunk so UV's stall detector
+												// (HeartbeatExpectedMs * 2 = 120s default)
+												// doesn't flip a long bulk-write to Stalled.
+												// At 250K rows / 500 per chunk = 500 chunks;
+												// even at 5-way concurrency the wall-clock
+												// can run several minutes total.
+												if (typeof fReportProgress === 'function')
+												{
+													try { fReportProgress({ Phase: 'writing', Entity: tmpEntity, Written: tmpEntityWritten, Errors: tmpEntityErrors }); }
+													catch (pProgErr) { /* best-effort */ }
+												}
+												tmpInFlight--;
+												// Refill the worker pool: try to start a
+												// fresh chunk to replace this one. If
+												// no more work AND nothing in flight,
+												// we're done.
+												if (tmpChunkOffset < tmpRowArr.length)
+												{
+													fStartNextChunk();
+												}
+												else if (tmpInFlight === 0)
+												{
+													fSignalEntityDone();
+												}
+											});
+									};
+									fAttemptChunk();
 								};
 
 								// Prime the pool with up to BulkConcurrency
@@ -3167,6 +3330,8 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 module.exports = DataMapperBeaconProvider;
 // Exposed for unit testing — pure helper, no instance state.
 module.exports._buildSortFilter = _buildSortFilter;
+module.exports._isRetryableWriteFailure = _isRetryableWriteFailure;
+module.exports._isChunkReplaySafe = _isChunkReplaySafe;
 module.exports._sanitizeForwardSession = _sanitizeForwardSession;
 module.exports._unnestRecordsHandler = _unnestRecordsHandler;
 module.exports._unnestGetByPath = _unnestGetByPath;

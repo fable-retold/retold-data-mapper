@@ -1201,5 +1201,269 @@ suite
 				);
 			}
 		);
+
+		// ============================================================
+		// WriteRecords — ResetMode=Replace orphan purge
+		// ============================================================
+		suite
+		(
+			'WriteRecords (ResetMode=Replace orphan purge)',
+			function ()
+			{
+				const libDataMapperBeaconProvider = require('../source/services/DataMapper-BeaconProvider.js');
+
+				const ENTITY = 'C10_Snapshot';
+				const CONNECTION_HASH = 'private-data-lake';
+				const BEACON_NAME = 'private_data_lake_beacon';
+
+				/**
+				 * Stand up the WriteRecords handler over a simulated meadow table.
+				 *
+				 * The table is a real object the mock mutates, so an assertion can ask what actually
+				 * survived rather than trusting the handler's own counters — the whole defect this
+				 * guards against was a run reporting Written:215 against an empty table.
+				 *
+				 * @param {Array<object>} pExistingRows — rows already in the table, each with ID/GUID
+				 * @returns {object} — { handler, table, deleted }
+				 */
+				function _makeWriteHarness(pExistingRows)
+				{
+					let tmpTable = (pExistingRows || []).slice();
+					let tmpDeleted = [];
+					let tmpNextID = tmpTable.length + 1;
+
+					let tmpFable = createTestFable();
+					let tmpProvider = new libDataMapperBeaconProvider(tmpFable, {}, 'DataMapperBeaconProviderTest');
+
+					tmpProvider._Client =
+					{
+						dispatch: function (pWorkItem, fCallback)
+						{
+							let tmpSettings = pWorkItem.Settings || {};
+
+							if (tmpSettings.Method === 'PUT')
+							{
+								let tmpRows = JSON.parse(tmpSettings.Body);
+								for (let i = 0; i < tmpRows.length; i++)
+								{
+									// meadow matches on GUID<Entity> to decide UPDATE vs INSERT.
+									let tmpGUID = tmpRows[i]['GUID' + ENTITY];
+									let tmpFound = tmpTable.find((pRow) => pRow['GUID' + ENTITY] === tmpGUID);
+									if (tmpFound && tmpGUID)
+									{
+										Object.assign(tmpFound, tmpRows[i]);
+										continue;
+									}
+									let tmpNew = Object.assign({}, tmpRows[i]);
+									tmpNew['ID' + ENTITY] = tmpNextID++;
+									tmpTable.push(tmpNew);
+								}
+								return fCallback(null,
+									{
+										Outputs:
+										{
+											Status: 200,
+											Headers:
+											{
+												'x-meadow-upsert-total': String(tmpRows.length),
+												'x-meadow-upsert-succeeded': String(tmpRows.length),
+												'x-meadow-upsert-errored': '0'
+											},
+											Body: '[]'
+										}
+									});
+							}
+
+							if (tmpSettings.Method === 'GET')
+							{
+								return fCallback(null, { Outputs: { Status: 200, Body: JSON.stringify(tmpTable) } });
+							}
+
+							if (tmpSettings.Method === 'DELETE')
+							{
+								let tmpID = parseInt(String(tmpSettings.Path).split('/').pop(), 10);
+								let tmpIndex = tmpTable.findIndex((pRow) => pRow['ID' + ENTITY] === tmpID);
+								if (tmpIndex > -1)
+								{
+									tmpDeleted.push(tmpTable[tmpIndex]);
+									tmpTable.splice(tmpIndex, 1);
+								}
+								return fCallback(null, { Outputs: { Status: 200, Body: '{}' } });
+							}
+
+							return fCallback(new Error(`unexpected dispatch: ${tmpSettings.Method}`));
+						}
+					};
+
+					let tmpCaptured = {};
+					tmpProvider.registerCapabilities(
+						{
+							registerCapability: function (pDefinition)
+							{
+								tmpCaptured[pDefinition.Capability] = pDefinition;
+							}
+						});
+
+					return {
+						handler: tmpCaptured.DataMapperRecords.actions.WriteRecords.Handler,
+						table: tmpTable,
+						deleted: tmpDeleted
+					};
+				}
+
+				/**
+				 * @param {object} pOverrides
+				 * @returns {object}
+				 */
+				function _writeSettings(pOverrides)
+				{
+					return Object.assign(
+						{
+							TargetBeaconName: BEACON_NAME,
+							ConnectionHash: CONNECTION_HASH,
+							Entity: ENTITY,
+							ResetMode: 'Replace',
+							BulkChunkSize: 500,
+							Concurrency: 1
+						}, pOverrides);
+				}
+
+				test
+				(
+					'rows keyed by GUID<Entity> SURVIVE a Replace write — the purge must not delete what it just wrote',
+					function (fDone)
+					{
+						// The regression. When the live set is built from a field the target scan does
+						// not read, every freshly-written row looks stale and the table ends up empty.
+						let tmpHarness = _makeWriteHarness([]);
+						let tmpRecords =
+							[
+								{ ['GUID' + ENTITY]: 'LADOTD-Material-0001', EntityName: 'Material', RecordJSON: '{}' },
+								{ ['GUID' + ENTITY]: 'LADOTD-Material-0002', EntityName: 'Material', RecordJSON: '{}' }
+							];
+
+						tmpHarness.handler({ Settings: _writeSettings({ Records: tmpRecords }) }, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.Outputs.Written, 2, 'both rows were written');
+							libAssert.strictEqual(pResult.Outputs.Errors, 0);
+							libAssert.strictEqual(tmpHarness.table.length, 2, 'both rows are still in the table');
+							libAssert.strictEqual(tmpHarness.deleted.length, 0, 'nothing was purged');
+							fDone();
+						});
+					}
+				);
+
+				test
+				(
+					'an explicit GUIDName that matches the record field also survives',
+					function (fDone)
+					{
+						// Identity lives ONLY in RecordGUID — no GUID<Entity> anywhere. This is the
+						// shape that emptied the table: the comprehension key fell back to a
+						// positional 'record-<i>' placeholder while the target scan read RecordGUID,
+						// so the two sides of the comparison could never match.
+						let tmpHarness = _makeWriteHarness(
+							[
+								{ ['ID' + ENTITY]: 1, RecordGUID: 'LADOTD-Material-0001', EntityName: 'Material' }
+							]);
+						let tmpRecords =
+							[
+								{ RecordGUID: 'LADOTD-Material-0001', EntityName: 'Material' }
+							];
+
+						tmpHarness.handler({ Settings: _writeSettings({ Records: tmpRecords, GUIDName: 'RecordGUID' }) }, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.Outputs.OrphansDeleted || 0, 0, 'the matching row was not treated as stale');
+							libAssert.strictEqual(tmpHarness.deleted.length, 0, 'nothing was deleted');
+							libAssert.ok(tmpHarness.table.length >= 1, 'the table was not emptied');
+							fDone();
+						});
+					}
+				);
+
+				test
+				(
+					'a genuine orphan IS purged — the guard must not disable Replace entirely',
+					function (fDone)
+					{
+						let tmpHarness = _makeWriteHarness(
+							[
+								{ ['ID' + ENTITY]: 1, ['GUID' + ENTITY]: 'LADOTD-Material-GONE', EntityName: 'Material' }
+							]);
+						let tmpRecords =
+							[
+								{ ['GUID' + ENTITY]: 'LADOTD-Material-0001', EntityName: 'Material' }
+							];
+
+						tmpHarness.handler({ Settings: _writeSettings({ Records: tmpRecords }) }, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.Outputs.OrphansDeleted, 1, 'the vanished row was purged');
+							libAssert.strictEqual(tmpHarness.deleted.length, 1);
+							libAssert.strictEqual(tmpHarness.deleted[0]['GUID' + ENTITY], 'LADOTD-Material-GONE');
+							libAssert.strictEqual(tmpHarness.table.length, 1, 'only the current row remains');
+							fDone();
+						});
+					}
+				);
+
+				test
+				(
+					'a re-run of the same records UPDATES rather than duplicating',
+					function (fDone)
+					{
+						let tmpHarness = _makeWriteHarness([]);
+						let tmpRecords =
+							[
+								{ ['GUID' + ENTITY]: 'LADOTD-Material-0001', EntityName: 'Material' },
+								{ ['GUID' + ENTITY]: 'LADOTD-Material-0002', EntityName: 'Material' }
+							];
+
+						tmpHarness.handler({ Settings: _writeSettings({ Records: tmpRecords }) }, {}, function (pFirstErr)
+						{
+							libAssert.strictEqual(pFirstErr, null);
+							tmpHarness.handler({ Settings: _writeSettings({ Records: tmpRecords }) }, {}, function (pErr, pResult)
+							{
+								libAssert.strictEqual(pErr, null);
+								libAssert.strictEqual(tmpHarness.table.length, 2, 'the table did not grow');
+								libAssert.strictEqual(pResult.Outputs.OrphansDeleted || 0, 0, 'nothing was treated as stale');
+								fDone();
+							});
+						});
+					}
+				);
+
+				test
+				(
+					'records with no value at GUIDName SKIP the purge rather than orphaning the table',
+					function (fDone)
+					{
+						// A live set that cannot be trusted must not drive deletes: refusing to purge
+						// strands stale rows, purging against it destroys the table.
+						let tmpHarness = _makeWriteHarness(
+							[
+								{ ['ID' + ENTITY]: 1, ['GUID' + ENTITY]: 'LADOTD-Material-EXISTING', EntityName: 'Material' }
+							]);
+						let tmpRecords =
+							[
+								{ RecordGUID: 'LADOTD-Material-0001', EntityName: 'Material' }
+							];
+
+						tmpHarness.handler({ Settings: _writeSettings({ Records: tmpRecords }) }, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.Outputs.OrphansDeleted || 0, 0, 'no deletes ran');
+							libAssert.strictEqual(tmpHarness.deleted.length, 0);
+							libAssert.ok(tmpHarness.table.length >= 1, 'the pre-existing row was not destroyed');
+							let tmpPerEntity = pResult.Outputs.PerEntity[ENTITY] || {};
+							libAssert.ok(tmpPerEntity.PurgeSkipped, 'the skipped purge is reported rather than silent');
+							fDone();
+						});
+					}
+				);
+			}
+		);
 	}
 );
