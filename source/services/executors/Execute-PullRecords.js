@@ -54,6 +54,23 @@ function _readAllRecords(pCoordinator, pBeaconName, pConnectionHash, pEntity, pB
 				}
 
 				let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
+
+				// A non-2xx source read MUST fail the pull — it is NOT an empty
+				// result. A dead source connection returns HTTP 404 (the proxied
+				// read goes out as user=anonymous), whose body is not a records
+				// array; without this guard it silently coerces to zero records
+				// and the stage reports success, so a broken connection
+				// masquerades as a clean 0-row refresh (and downstream ResetMode
+				// Replace skips its purge, stranding stale rows). A LEGITIMATE
+				// empty result is HTTP 200 with an empty array. Status is absent
+				// for callers that do not populate it, so only a numeric >=400
+				// status trips this (backward-compatible).
+				let tmpStatus = tmpOutputs.Status;
+				if (typeof (tmpStatus) === 'number' && tmpStatus >= 400)
+				{
+					return fCallback(new Error(`source read failed: HTTP ${tmpStatus} at offset ${tmpOffset} reading ${pEntity} on beacon [${pBeaconName}] (body: ${String(tmpOutputs.Body || '').slice(0, 200)})`), tmpAllRecords);
+				}
+
 				let tmpBody = tmpOutputs.Body;
 
 				if (typeof (tmpBody) === 'string')

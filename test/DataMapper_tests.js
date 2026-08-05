@@ -1111,5 +1111,95 @@ suite
 				);
 			}
 		);
+
+		// ============================================================
+		// Execute-PullRecords — status-aware source read
+		// ============================================================
+		suite
+		(
+			'Execute-PullRecords (status-aware source read)',
+			function ()
+			{
+				const libExecutePullRecords = require('../source/services/executors/Execute-PullRecords.js');
+
+				function _makeMockTask(pOutputs)
+				{
+					let tmpCoordinator =
+					{
+						dispatchAndWait: function (pWorkItem, fCallback)
+						{
+							return fCallback(null, { Outputs: pOutputs });
+						}
+					};
+					return { fable: { servicesMap: { UltravisorBeaconCoordinator: { ubc: tmpCoordinator } } } };
+				}
+
+				const PULL_SETTINGS = { BeaconName: 'mpi', ConnectionHash: 'headlight-platform-api', Entity: 'Document', BatchSize: 100 };
+
+				test
+				(
+					'a non-2xx source read (dead connection, HTTP 404) FAILS the pull — not a silent 0-row success',
+					function (fDone)
+					{
+						let tmpTask = _makeMockTask({ Status: 404, Body: '{"code":"NotFound"}' });
+						libExecutePullRecords(tmpTask, PULL_SETTINGS, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.EventToFire, 'Error');
+							libAssert.ok(/HTTP 404/.test(pResult.Log.join(' ')), 'the error names the HTTP status');
+							fDone();
+						});
+					}
+				);
+
+				test
+				(
+					'a legitimate empty result (HTTP 200 + []) is a clean 0-row success, NOT an error',
+					function (fDone)
+					{
+						let tmpTask = _makeMockTask({ Status: 200, Body: '[]' });
+						libExecutePullRecords(tmpTask, PULL_SETTINGS, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.EventToFire, 'AllRecordsPulled');
+							libAssert.strictEqual(pResult.Outputs.TotalPulled, 0);
+							fDone();
+						});
+					}
+				);
+
+				test
+				(
+					'a normal read (HTTP 200 + records) emits RecordAvailable — the status guard does not break the happy path',
+					function (fDone)
+					{
+						let tmpTask = _makeMockTask({ Status: 200, Body: JSON.stringify([ { IDDocument: 1 }, { IDDocument: 2 } ]) });
+						libExecutePullRecords(tmpTask, PULL_SETTINGS, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.EventToFire, 'RecordAvailable');
+							libAssert.strictEqual(pResult.Outputs.TotalPulled, 2);
+							fDone();
+						});
+					}
+				);
+
+				test
+				(
+					'a missing status (undefined) stays backward-compatible — the body drives the result',
+					function (fDone)
+					{
+						let tmpTask = _makeMockTask({ Body: JSON.stringify([ { IDDocument: 9 } ]) });
+						libExecutePullRecords(tmpTask, PULL_SETTINGS, {}, function (pErr, pResult)
+						{
+							libAssert.strictEqual(pErr, null);
+							libAssert.strictEqual(pResult.EventToFire, 'RecordAvailable');
+							libAssert.strictEqual(pResult.Outputs.TotalPulled, 1);
+							fDone();
+						});
+					}
+				);
+			}
+		);
 	}
 );
