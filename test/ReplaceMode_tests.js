@@ -133,3 +133,97 @@ suite('WriteRecords ResetMode=Replace (dead-aggregate purge)', function ()
 		libAssert.strictEqual(tmpDeletes.length, 0, 'no deletes when the live-set fetch failed (fail-safe)');
 	});
 });
+
+function writeWithSettings(pHarness, pSettings)
+{
+	return new Promise((fResolve) =>
+		pHarness.handlers['DataMapperRecords:WriteRecords'].Handler(
+			{ Settings: pSettings }, {},
+			(pError, pResult) => fResolve({ Error: pError, Result: pResult })));
+}
+
+// The live set (what this run wrote) and the target scan (what is already
+// there) have to read the identity off the same column, or they are disjoint
+// by construction and the purge deletes the whole table — including the rows
+// the same call just wrote.
+suite('WriteRecords ResetMode=Replace (live-set identity)', function ()
+{
+	const ENTITY = 'C10_SpecYear2026_XformProof';
+	const RECORDS =
+	[
+		{ EntityName: 'Material', RecordGUID: 'LADOTD-Material-0001', RecordJSON: '{}' },
+		{ EntityName: 'Material', RecordGUID: 'LADOTD-Material-0002', RecordJSON: '{}' }
+	];
+
+	function replaceSettings(pOverrides)
+	{
+		return Object.assign(
+			{
+				TargetBeaconName: 'private_data_lake_beacon', ConnectionHash: 'private-data-lake',
+				Entity: ENTITY, GUIDName: 'RecordGUID', ResetMode: 'Replace', Records: RECORDS
+			}, pOverrides || {});
+	}
+
+	test('Records[] + a GUIDName other than GUID<Entity> purges nothing against an empty target', async function ()
+	{
+		const tmpHarness = buildHarness([]);
+		const tmpOutcome = await writeWithSettings(tmpHarness, replaceSettings());
+		libAssert.strictEqual(tmpOutcome.Error, null);
+		libAssert.deepStrictEqual(tmpHarness.ledger.deletes, [], 'the rows just written are not orphans');
+		libAssert.strictEqual(tmpOutcome.Result.Outputs.OrphansDeleted, 0);
+	});
+
+	test('Records[] + a GUIDName other than GUID<Entity> deletes only genuinely stale rows', async function ()
+	{
+		const tmpHarness = buildHarness([
+			{ ['ID' + ENTITY]: 1, RecordGUID: 'LADOTD-Material-0001' },
+			{ ['ID' + ENTITY]: 2, RecordGUID: 'LADOTD-Material-DEAD' },
+			{ ['ID' + ENTITY]: 3, RecordGUID: 'LADOTD-Material-0002' }
+		]);
+		const tmpOutcome = await writeWithSettings(tmpHarness, replaceSettings());
+		libAssert.strictEqual(tmpOutcome.Error, null);
+		libAssert.deepStrictEqual(tmpHarness.ledger.deletes, [ `/1.0/private-data-lake/${ENTITY}/2` ],
+			'only the row absent from this run is purged, by primary key');
+		libAssert.strictEqual(tmpOutcome.Result.Outputs.OrphansDeleted, 1);
+	});
+
+	test('a record with no value at GUIDName skips the purge entirely and says why', async function ()
+	{
+		const tmpHarness = buildHarness([
+			{ ['ID' + ENTITY]: 1, RecordGUID: 'LADOTD-Material-0001' },
+			{ ['ID' + ENTITY]: 2, RecordGUID: 'LADOTD-Material-DEAD' }
+		]);
+		const tmpOutcome = await writeWithSettings(tmpHarness, replaceSettings(
+			{ Records: RECORDS.concat([ { EntityName: 'Material', RecordJSON: '{}' } ]) }));
+		libAssert.strictEqual(tmpOutcome.Error, null);
+		libAssert.strictEqual(tmpHarness.ledger.upserts.length, 1, 'the write still happens');
+		libAssert.deepStrictEqual(tmpHarness.ledger.deletes, [], 'nothing is purged against an incomplete live set');
+		libAssert.deepStrictEqual(tmpOutcome.Result.Outputs.PurgeSkipped, [ ENTITY ]);
+		libAssert.match(JSON.stringify(tmpOutcome.Result.Outputs.ErrorLog), /1 of 3 records carry no value at 'RecordGUID'/);
+		libAssert.match(tmpOutcome.Result.Log.join(' '), /orphan purge SKIPPED/);
+	});
+
+	test('a comprehension keyed off a different field than GUIDName still purges by GUIDName', async function ()
+	{
+		const tmpHarness = buildHarness([
+			{ ['ID' + ENTITY]: 7, RecordGUID: 'LADOTD-Material-0001' },
+			{ ['ID' + ENTITY]: 8, RecordGUID: 'LADOTD-Material-DEAD' }
+		]);
+		let tmpComprehension = {};
+		tmpComprehension[ENTITY] = { 'record-0': RECORDS[0], 'record-1': RECORDS[1] };
+		const tmpOutcome = await writeWithSettings(tmpHarness, replaceSettings({ Records: null, Comprehension: tmpComprehension }));
+		libAssert.strictEqual(tmpOutcome.Error, null);
+		libAssert.deepStrictEqual(tmpHarness.ledger.deletes, [ `/1.0/private-data-lake/${ENTITY}/8` ],
+			'the comprehension key is not identity — the record payload is');
+	});
+
+	test('OrphansDeleted is reported under Replace even when it is zero', async function ()
+	{
+		const tmpHarness = buildHarness([]);
+		const tmpOutcome = await writeWithSettings(tmpHarness, replaceSettings());
+		libAssert.strictEqual(tmpOutcome.Result.Outputs.OrphansDeleted, 0);
+		libAssert.strictEqual(tmpOutcome.Result.Outputs.OrphanErrors, 0);
+		const tmpAppend = await writeWithSettings(buildHarness([]), replaceSettings({ ResetMode: 'Append' }));
+		libAssert.strictEqual(tmpAppend.Result.Outputs.OrphansDeleted, undefined, 'Append reports no orphan stats at all');
+	});
+});

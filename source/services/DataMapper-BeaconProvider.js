@@ -1798,11 +1798,11 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'ConnectionHash',   DataType: 'String', Required: true, Description: 'URL slug of the target connection (the beacon\'s meadow REST is at /1.0/<ConnectionHash>/).' },
 							{ Name: 'Entity',           DataType: 'String', Required: false, Description: 'Target entity name. Informational when Comprehension is supplied; meadow upserts each entity in the comprehension by its key.' },
 							{ Name: 'Comprehension',    DataType: 'Object', Required: false, Description: 'Comprehension { <Entity>: { <GUID>: <record>, ... } }. Preferred input; flows from the BuildComprehension node.' },
-							{ Name: 'Records',          DataType: 'Array',  Required: false, Description: 'Back-compat: bare records array. If provided without Comprehension, will be wrapped into { <Entity>: { <i>: <record> } }.' },
+							{ Name: 'Records',          DataType: 'Array',  Required: false, Description: 'Back-compat: bare records array. If provided without Comprehension, will be wrapped into { <Entity>: { <identity>: <record> } }, keyed by each record\'s value at GUIDName (default "GUID" + Entity).' },
 							{ Name: 'BulkChunkSize',    DataType: 'Number', Required: false, Description: 'Records per bulk Upserts call. Default 500. Each chunk is one PUT roundtrip through MeadowProxy.' },
 							{ Name: 'Concurrency',      DataType: 'Number', Required: false, Description: 'How many bulk Upserts chunks to keep in flight concurrently. Default 1 (preserves the original sequential behavior — backwards-compatible). Clamped to [1, 5]: meadow-endpoints\' /Upserts handler processes its rows strictly serially per request, so client-side parallelism is the only knob for raw throughput, but each worker takes a postgres connection from the target beacon\'s pool — keeping the cap modest avoids starving other tenants of the lake. Compilers (typed-op Write nodes) opt in explicitly; ad-hoc /Upserts callers stay at 1.' },
-							{ Name: 'ResetMode',        DataType: 'String', Required: false, Description: '\'Append\' (default) | \'Replace\'. Replace soft-deletes existing rows whose GUID is NOT in the new comprehension after the upsert succeeds — keeps cached views from accumulating orphans when source data churns. The purge does NOT touch meadow\'s internal Upsert handler (which is intentionally serial); orphans are deleted via meadow\'s standard DELETE-by-id surface, parallelized client-side via Concurrency.' },
-							{ Name: 'GUIDName',         DataType: 'String', Required: false, Description: 'Column name for the GUID/identity used by ResetMode=Replace orphan detection. Defaults to "GUID" + Entity. Ignored when ResetMode=Append.' }
+							{ Name: 'ResetMode',        DataType: 'String', Required: false, Description: '\'Append\' (default) | \'Replace\'. Replace soft-deletes existing rows whose GUIDName value is NOT among the rows written, after the upsert succeeds — keeps cached views from accumulating orphans when source data churns. The purge does NOT touch meadow\'s internal Upsert handler (which is intentionally serial); orphans are deleted via meadow\'s standard DELETE-by-id surface, parallelized client-side via Concurrency. The purge is FAIL-SAFE: if any record carries no value at GUIDName, or the existing-rows fetch fails, the purge is skipped entirely (Outputs.PurgeSkipped names the entity, ErrorLog carries the reason) rather than deleting against a live set known to be incomplete.' },
+							{ Name: 'GUIDName',         DataType: 'String', Required: false, Description: 'Column name for the GUID/identity used by ResetMode=Replace orphan detection. Defaults to "GUID" + Entity. Read from BOTH the records being written and the rows already in the target — the two must be the same column or the purge would be comparing unrelated values. Ignored when ResetMode=Append. NOTE: this does NOT change meadow\'s upsert key, which is always GUID<Entity>; records that carry no GUID<Entity> INSERT on every run, so a Replace keyed on some other column will accumulate duplicates rather than replace them.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback, fReportProgress)
 						{
@@ -1819,14 +1819,19 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 
 							// Wrap a bare records array into a single-entity
 							// comprehension so the rest of the handler is uniform.
+							// The key must come from the SAME column ResetMode=
+							// Replace scans the target with (Settings.GUIDName),
+							// or the live set and the target scan are disjoint by
+							// construction and the purge empties the table.
 							if (!tmpComprehension && Array.isArray(tmpRecords) && tmpEntityHint)
 							{
+								let tmpWrapGUIDName = tmpSettings.GUIDName || ('GUID' + tmpEntityHint);
 								tmpComprehension = {};
 								tmpComprehension[tmpEntityHint] = {};
 								for (let i = 0; i < tmpRecords.length; i++)
 								{
 									let tmpRow = tmpRecords[i];
-									let tmpGUIDKey = (tmpRow && tmpRow['GUID' + tmpEntityHint]) ? String(tmpRow['GUID' + tmpEntityHint]) : ('record-' + i);
+									let tmpGUIDKey = (tmpRow && tmpRow[tmpWrapGUIDName]) ? String(tmpRow[tmpWrapGUIDName]) : ('record-' + i);
 									tmpComprehension[tmpEntityHint][tmpGUIDKey] = tmpRow;
 								}
 							}
@@ -1855,6 +1860,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpErrorLog     = [];
 							let tmpEntitiesWritten = [];
 							let tmpEntityCounts = {};
+							let tmpEntitiesPurgeSkipped = [];
 
 							let fNextEntity = () =>
 							{
@@ -1878,14 +1884,31 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 										PerEntity:        tmpEntityCounts,
 										ElapsedMs:        tmpElapsedMs
 									};
-									if (tmpTotalOrphansDeleted > 0 || tmpTotalOrphanErrors > 0)
+									// Under Replace the orphan counts are emitted
+									// unconditionally — a caller can't tell a purge
+									// that deleted nothing from one that never ran
+									// if the field only appears when it's non-zero.
+									if (tmpSettings.ResetMode === 'Replace' || tmpTotalOrphansDeleted > 0 || tmpTotalOrphanErrors > 0)
 									{
 										tmpOutputs.OrphansDeleted = tmpTotalOrphansDeleted;
 										tmpOutputs.OrphanErrors   = tmpTotalOrphanErrors;
 									}
+									if (tmpEntitiesPurgeSkipped.length > 0)
+									{
+										tmpOutputs.PurgeSkipped = tmpEntitiesPurgeSkipped;
+									}
+									let tmpLog = [`WriteRecords (Upsert → ${tmpBeaconName}/${tmpConnHash}): ${tmpTotalWritten} written across ${tmpEntitiesWritten.length} entity(ies), ${tmpTotalErrors} errors${tmpTotalOrphansDeleted ? ', ' + tmpTotalOrphansDeleted + ' orphans purged' : ''}, in ${tmpElapsedMs}ms.`];
+									if (tmpEntitiesPurgeSkipped.length > 0)
+									{
+										tmpLog.push(`WriteRecords[Replace]: orphan purge SKIPPED for entity(ies) [${tmpEntitiesPurgeSkipped.join(', ')}] — see ErrorLog. Stale rows remain in the target.`);
+									}
+									if (tmpTotalWritten > 0 && tmpTotalOrphansDeleted >= tmpTotalWritten)
+									{
+										tmpLog.push(`WriteRecords[Replace]: purged ${tmpTotalOrphansDeleted} orphan(s) against ${tmpTotalWritten} written row(s) — verify this shrink is intended.`);
+									}
 									return fHandlerCallback(null, {
 										Outputs: tmpOutputs,
-										Log: [`WriteRecords (Upsert → ${tmpBeaconName}/${tmpConnHash}): ${tmpTotalWritten} written across ${tmpEntitiesWritten.length} entity(ies), ${tmpTotalErrors} errors${tmpTotalOrphansDeleted ? ', ' + tmpTotalOrphansDeleted + ' orphans purged' : ''}, in ${tmpElapsedMs}ms.`]
+										Log: tmpLog
 									});
 								}
 								let tmpEntity = tmpEntityKeys[tmpEntityIdx];
@@ -1926,6 +1949,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								let tmpDoneSignaled = false;
 								let tmpOrphansDeleted = 0;
 								let tmpOrphanErrors = 0;
+								let tmpPurgeSkippedReason = '';
 
 								let fFinalizeEntity = () =>
 								{
@@ -1939,6 +1963,11 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										tmpCounts.OrphansDeleted = tmpOrphansDeleted;
 										tmpCounts.OrphanErrors   = tmpOrphanErrors;
+										if (tmpPurgeSkippedReason)
+										{
+											tmpCounts.PurgeSkipped = tmpPurgeSkippedReason;
+											tmpEntitiesPurgeSkipped.push(tmpEntity);
+										}
 									}
 									tmpEntityCounts[tmpEntity] = tmpCounts;
 									return fNextEntity();
@@ -1952,12 +1981,46 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								{
 									if (tmpResetMode !== 'Replace') return fFinalizeEntity();
 
-									// Replace mode: the live set is the GUIDs
-									// in this run's comprehension. Anything in
-									// the lake table that's NOT in this set is
-									// stale and gets soft-deleted.
+									// Replace mode: the live set is the identity
+									// of every row in this run. Anything in the
+									// lake table that's NOT in this set is stale
+									// and gets soft-deleted.
+									//
+									// Read the identity off the RECORD, not off
+									// the comprehension key: the key is whatever
+									// the upstream node chose (BuildComprehension's
+									// GUIDField, the Records[] wrapper, a hand-
+									// authored map) and a key that disagrees with
+									// tmpGUIDName makes the live set disjoint from
+									// the target scan — every existing row then
+									// looks stale, including the ones this call
+									// just wrote.
 									let tmpLiveSet = new Set();
-									for (let k = 0; k < tmpRowKeys.length; k++) tmpLiveSet.add(String(tmpRowKeys[k]));
+									let tmpUnkeyedRows = 0;
+									for (let k = 0; k < tmpRowArr.length; k++)
+									{
+										let tmpLiveRow = tmpRowArr[k];
+										let tmpIdentity = tmpLiveRow ? tmpLiveRow[tmpGUIDName] : undefined;
+										if (tmpIdentity === undefined || tmpIdentity === null || tmpIdentity === '')
+										{
+											tmpUnkeyedRows++;
+											continue;
+										}
+										tmpLiveSet.add(String(tmpIdentity));
+									}
+
+									// A row with no identity can't be told apart
+									// from a stale one. Rather than purge against
+									// a set we know is incomplete, skip the pass
+									// and say so — same fail-safe stance as a
+									// failed existing-rows fetch below.
+									if (tmpUnkeyedRows > 0)
+									{
+										tmpPurgeSkippedReason = `${tmpUnkeyedRows} of ${tmpRowArr.length} records carry no value at '${tmpGUIDName}'`;
+										tmpErrorLog.push({ Entity: tmpEntity, PurgeSkipped: tmpPurgeSkippedReason });
+										tmpFable.log.warn(`WriteRecords[Replace]: purge skipped for [${tmpEntity}] — ${tmpPurgeSkippedReason}.`);
+										return fFinalizeEntity();
+									}
 									let tmpListPath = (pPage, pSize) => `/1.0/${tmpConnHash}/${tmpEntity}s/${pPage * pSize}/${pSize}`;
 
 									// Paginate the existing rows. Page size
@@ -1984,7 +2047,9 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											{
 												if (pErr)
 												{
-													tmpFable.log.warn(`WriteRecords[Replace]: existing-rows fetch error at page ${tmpPage}: ${pErr.message}`);
+													tmpPurgeSkippedReason = `existing-rows fetch failed at page ${tmpPage}: ${pErr.message}`;
+													tmpErrorLog.push({ Entity: tmpEntity, PurgeSkipped: tmpPurgeSkippedReason });
+													tmpFable.log.warn(`WriteRecords[Replace]: purge skipped for [${tmpEntity}] — ${tmpPurgeSkippedReason}.`);
 													return fFinalizeEntity();
 												}
 												let tmpOut = (pResult && pResult.Outputs) || pResult || {};
