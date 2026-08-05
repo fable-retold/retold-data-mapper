@@ -602,12 +602,18 @@ fResolve(pResult);}/**
 	 *   a rect-like { left, top, width, height } anchor (handy for context menus).
 	 * @param {object} pOptions
 	 * @param {Array}    pOptions.items     - [{ Hash, Label, Style?, Disabled?, Tooltip?, Icon?, Separator? }]
-	 * @param {string}   [pOptions.align]   - 'left'|'right' (default 'left')
+	 * @param {string}   [pOptions.ContentHTML] - Free-form HTML body for the popover, rendered
+	 *   verbatim via innerHTML INSTEAD of building a menu from items[]. When set, the element is
+	 *   a plain anchored popover (no role=menu / keyboard item nav); outside-click, Escape,
+	 *   auto-flip and reposition still apply. Sanitize untrusted content. items is ignored.
+	 * @param {string}   [pOptions.align]   - 'left'|'right'|'center' (default 'left')
 	 * @param {string}   [pOptions.position]- 'auto'|'below'|'above' (default 'auto')
 	 * @param {string}   [pOptions.minWidth]- CSS minWidth (default: anchor width if known, else '160px')
+	 * @param {string}   [pOptions.maxWidth]- CSS maxWidth (default unset; the base menu caps at 360px,
+	 *   the --content variant uncaps — set this for wide rich-content popovers)
 	 * @param {string}   [pOptions.maxHeight]- CSS maxHeight (default '60vh')
 	 * @param {string}   [pOptions.className]- extra class(es) for the menu element
-	 * @param {boolean}  [pOptions.closeOnSelect] - default true
+	 * @param {boolean}  [pOptions.closeOnSelect] - default true (no-op in ContentHTML mode)
 	 * @param {function} [pOptions.onSelect]- called with (Hash, Item) on selection
 	 * @param {function} [pOptions.onClose] - called after dismiss
 	 * @returns {Promise<{Hash: string, Item: object}|null>}
@@ -631,7 +637,21 @@ setTimeout(()=>{this._focusFirstEnabled(tmpMenu);},0);this._activeMenu={element:
 // ─────────────────────────────────────────────
 _resolveAnchor(pAnchor){if(!pAnchor){return null;}if(typeof pAnchor==='string'){return document.querySelector(pAnchor);}if(pAnchor.nodeType===1){return pAnchor;}// rect-like — no element to attach focus / outside-click ignore to,
 // but that's fine, the caller knows what they're doing.
-return null;}_anchorRect(pAnchor,pAnchorEl){if(pAnchorEl&&typeof pAnchorEl.getBoundingClientRect==='function'){return pAnchorEl.getBoundingClientRect();}if(pAnchor&&typeof pAnchor==='object'&&typeof pAnchor.left==='number'&&typeof pAnchor.top==='number'){return{left:pAnchor.left,top:pAnchor.top,width:pAnchor.width||0,height:pAnchor.height||0,right:pAnchor.left+(pAnchor.width||0),bottom:pAnchor.top+(pAnchor.height||0)};}return null;}_buildMenu(pItems,pOptions){let tmpId=this._modal._nextId();let tmpMenu=document.createElement('div');tmpMenu.className='pict-modal-dropdown';if(pOptions.className){tmpMenu.className+=' '+pOptions.className;}tmpMenu.id='pict-modal-dropdown-'+tmpId;tmpMenu.setAttribute('role','menu');tmpMenu.style.maxHeight=pOptions.maxHeight;let tmpHtml='';for(let i=0;i<pItems.length;i++){let tmpItem=pItems[i];if(tmpItem.Separator){tmpHtml+='<div class="pict-modal-dropdown-separator" role="separator"></div>';continue;}if(tmpItem.Header){tmpHtml+='<div class="pict-modal-dropdown-header">'+this._escapeHTML(tmpItem.Header)+'</div>';continue;}let tmpCls='pict-modal-dropdown-item';if(tmpItem.Style){tmpCls+=' pict-modal-dropdown-item--'+tmpItem.Style;}if(tmpItem.Disabled){tmpCls+=' pict-modal-dropdown-item--disabled';}let tmpAttrs=''+' data-pict-modal-dropdown-item'+' data-index="'+i+'"'+' data-hash="'+this._escapeHTML(tmpItem.Hash||'')+'"'+' role="menuitem"'+' tabindex="-1"';if(tmpItem.Disabled){tmpAttrs+=' aria-disabled="true" data-disabled';}if(tmpItem.Tooltip){tmpAttrs+=' title="'+this._escapeHTML(tmpItem.Tooltip)+'"';}let tmpIcon=tmpItem.Icon?'<span class="pict-modal-dropdown-item-icon">'+tmpItem.Icon+'</span>':'';let tmpHint=tmpItem.Hint?'<span class="pict-modal-dropdown-item-hint">'+this._escapeHTML(tmpItem.Hint)+'</span>':'';tmpHtml+='<div class="'+tmpCls+'"'+tmpAttrs+'>'+tmpIcon+'<span class="pict-modal-dropdown-item-label">'+this._escapeHTML(tmpItem.Label||'')+'</span>'+tmpHint+'</div>';}tmpMenu.innerHTML=tmpHtml;return tmpMenu;}_positionMenu(pMenu,pAnchorRect,pOptions){// Apply min-width before measuring so the menu's natural size accounts
+return null;}_anchorRect(pAnchor,pAnchorEl){if(pAnchorEl&&typeof pAnchorEl.getBoundingClientRect==='function'){return pAnchorEl.getBoundingClientRect();}if(pAnchor&&typeof pAnchor==='object'&&typeof pAnchor.left==='number'&&typeof pAnchor.top==='number'){return{left:pAnchor.left,top:pAnchor.top,width:pAnchor.width||0,height:pAnchor.height||0,right:pAnchor.left+(pAnchor.width||0),bottom:pAnchor.top+(pAnchor.height||0)};}return null;}/**
+	 * True when the value is usable as ContentHTML — a primitive string or a
+	 * boxed String object (some template engines hand back `new String(...)`,
+	 * which is `typeof 'object'` and would otherwise slip past the guard).
+	 *
+	 * @param {*} pValue
+	 * @returns {boolean}
+	 */_isContentHTML(pValue){return typeof pValue==='string'||pValue instanceof String;}_buildMenu(pItems,pOptions){let tmpId=this._modal._nextId();let tmpMenu=document.createElement('div');tmpMenu.className='pict-modal-dropdown';// Free-form content popovers carry a modifier so the host can reset the
+// menu-item chrome (padding / max-width) and style the body itself.
+if(this._isContentHTML(pOptions.ContentHTML)){tmpMenu.className+=' pict-modal-dropdown--content';}if(pOptions.className){tmpMenu.className+=' '+pOptions.className;}tmpMenu.id='pict-modal-dropdown-'+tmpId;tmpMenu.style.maxHeight=pOptions.maxHeight;if(pOptions.maxWidth){tmpMenu.style.maxWidth=pOptions.maxWidth;}// ContentHTML mode: render the caller's HTML verbatim instead of building
+// a menu from items[]. This is a free-form anchored popover (e.g. a rich
+// info card, or a pre-rendered template menu) — not a role=menu list, so
+// we skip the menu role and the per-item keyboard semantics. Outside-click
+// / Escape / auto-flip / reposition all still apply from dropdown().
+if(this._isContentHTML(pOptions.ContentHTML)){tmpMenu.innerHTML=pOptions.ContentHTML;return tmpMenu;}tmpMenu.setAttribute('role','menu');let tmpHtml='';for(let i=0;i<pItems.length;i++){let tmpItem=pItems[i];if(tmpItem.Separator){tmpHtml+='<div class="pict-modal-dropdown-separator" role="separator"></div>';continue;}if(tmpItem.Header){tmpHtml+='<div class="pict-modal-dropdown-header">'+this._escapeHTML(tmpItem.Header)+'</div>';continue;}let tmpCls='pict-modal-dropdown-item';if(tmpItem.Style){tmpCls+=' pict-modal-dropdown-item--'+tmpItem.Style;}if(tmpItem.Disabled){tmpCls+=' pict-modal-dropdown-item--disabled';}let tmpAttrs=''+' data-pict-modal-dropdown-item'+' data-index="'+i+'"'+' data-hash="'+this._escapeHTML(tmpItem.Hash||'')+'"'+' role="menuitem"'+' tabindex="-1"';if(tmpItem.Disabled){tmpAttrs+=' aria-disabled="true" data-disabled';}if(tmpItem.Tooltip){tmpAttrs+=' title="'+this._escapeHTML(tmpItem.Tooltip)+'"';}let tmpIcon=tmpItem.Icon?'<span class="pict-modal-dropdown-item-icon">'+tmpItem.Icon+'</span>':'';let tmpHint=tmpItem.Hint?'<span class="pict-modal-dropdown-item-hint">'+this._escapeHTML(tmpItem.Hint)+'</span>':'';tmpHtml+='<div class="'+tmpCls+'"'+tmpAttrs+'>'+tmpIcon+'<span class="pict-modal-dropdown-item-label">'+this._escapeHTML(tmpItem.Label||'')+'</span>'+tmpHint+'</div>';}tmpMenu.innerHTML=tmpHtml;return tmpMenu;}_positionMenu(pMenu,pAnchorRect,pOptions){// Apply min-width before measuring so the menu's natural size accounts
 // for the constraint.
 let tmpMinWidth=pOptions.minWidth||(pAnchorRect.width>=80?Math.ceil(pAnchorRect.width)+'px':'160px');pMenu.style.minWidth=tmpMinWidth;// Measure after attaching.
 let tmpMenuRect=pMenu.getBoundingClientRect();let tmpVw=window.innerWidth||document.documentElement.clientWidth;let tmpVh=window.innerHeight||document.documentElement.clientHeight;let tmpGap=4;// breathing room between anchor and menu
@@ -1017,9 +1037,11 @@ class PictModalShellManager{constructor(pModalSection){this._modal=pModalSection
 	 * Show a toast notification.
 	 *
 	 * @param {string} pMessage - Toast message text
-	 * @param {object} [pOptions] - Options (type, duration, position, dismissible)
+	 * @param {object} [pOptions] - Options (type, duration, position, dismissible, allowHTML)
+	 * @param {boolean} [pOptions.allowHTML=false] - When true, render pMessage as raw HTML instead of escaping it. Only pass trusted markup.
 	 * @returns {{ dismiss: function }} Handle with dismiss method
-	 */toast(pMessage,pOptions){let tmpOptions=Object.assign({},this._modal.options.DefaultToastOptions,pOptions);let tmpContainer=this._getContainer(tmpOptions.position);let tmpId=this._modal._nextId();let tmpToast=document.createElement('div');tmpToast.className='pict-modal-toast pict-modal-toast--'+tmpOptions.type;tmpToast.id='pict-modal-toast-'+tmpId;let tmpContent='<span class="pict-modal-toast-message">'+this._escapeHTML(pMessage)+'</span>';if(tmpOptions.dismissible){tmpContent+='<button class="pict-modal-toast-dismiss" aria-label="Dismiss">&times;</button>';}tmpToast.innerHTML=tmpContent;// Create handle
+	 */toast(pMessage,pOptions){let tmpOptions=Object.assign({},this._modal.options.DefaultToastOptions,pOptions);let tmpContainer=this._getContainer(tmpOptions.position);let tmpId=this._modal._nextId();let tmpToast=document.createElement('div');tmpToast.className='pict-modal-toast pict-modal-toast--'+tmpOptions.type;tmpToast.id='pict-modal-toast-'+tmpId;// Escape by default; render raw markup only when the caller opts in with allowHTML (trusted content).
+let tmpMessageMarkup=tmpOptions.allowHTML===true?pMessage:this._escapeHTML(pMessage);let tmpContent='<span class="pict-modal-toast-message">'+tmpMessageMarkup+'</span>';if(tmpOptions.dismissible){tmpContent+='<button class="pict-modal-toast-dismiss" aria-label="Dismiss">&times;</button>';}tmpToast.innerHTML=tmpContent;// Create handle
 let tmpDismissed=false;let tmpTimeoutHandle=null;let tmpDismiss=()=>{if(tmpDismissed){return;}tmpDismissed=true;if(tmpTimeoutHandle){clearTimeout(tmpTimeoutHandle);}// Exit animation
 tmpToast.classList.remove('pict-modal-visible');tmpToast.classList.add('pict-modal-toast-exit');// Remove from active list
 this._modal._activeToasts=this._modal._activeToasts.filter(pEntry=>{return pEntry.element!==tmpToast;});// Remove from DOM after transition
@@ -1065,6 +1087,19 @@ if(tmpOptions.duration>0){tmpTimeoutHandle=setTimeout(tmpDismiss,tmpOptions.dura
 	 * @param {object} [pOptions] - Options (position, delay, maxWidth, interactive)
 	 * @returns {{ destroy: function }} Handle to remove the tooltip
 	 */richTooltip(pElement,pHTMLContent,pOptions){let tmpOptions=Object.assign({},this._modal.options.DefaultTooltipOptions,pOptions);return this._attachTooltip(pElement,pHTMLContent,true,tmpOptions);}/**
+	 * Attach a pinnable rich HTML tooltip to an element.
+	 *
+	 * Behaves like richTooltip() on hover/focus, but a click on the element
+	 * toggles a pinned state: while pinned the tooltip stays open (it does not
+	 * hide on mouseleave/focusout) and follows its anchor on scroll/resize.
+	 * This is opt-in sugar over richTooltip() with `{ pinnable: true }` — the
+	 * default tooltip()/richTooltip() behavior is unchanged.
+	 *
+	 * @param {HTMLElement} pElement - Target element
+	 * @param {string} pHTMLContent - HTML content for the tooltip
+	 * @param {object} [pOptions] - Options (position, delay, maxWidth, interactive, startPinned, onPinChange)
+	 * @returns {{ destroy: function, pin: function, unpin: function, isPinned: function }} Handle
+	 */pinnableTooltip(pElement,pHTMLContent,pOptions){let tmpOptions=Object.assign({},this._modal.options.DefaultTooltipOptions,pOptions,{pinnable:true});return this._attachTooltip(pElement,pHTMLContent,true,tmpOptions);}/**
 	 * Internal: attach tooltip event listeners to an element.
 	 *
 	 * @param {HTMLElement} pElement
@@ -1072,18 +1107,46 @@ if(tmpOptions.duration>0){tmpTimeoutHandle=setTimeout(tmpDismiss,tmpOptions.dura
 	 * @param {boolean} pIsHTML
 	 * @param {object} pOptions
 	 * @returns {{ destroy: function }}
-	 */_attachTooltip(pElement,pContent,pIsHTML,pOptions){let tmpTooltipElement=null;let tmpShowTimeout=null;let tmpHideTimeout=null;let tmpDestroyed=false;let tmpId=this._modal._nextId();let tmpShow=()=>{if(tmpDestroyed||tmpTooltipElement){return;}tmpTooltipElement=document.createElement('div');tmpTooltipElement.className='pict-modal-tooltip pict-modal-tooltip--'+pOptions.position;tmpTooltipElement.id='pict-modal-tooltip-'+tmpId;tmpTooltipElement.setAttribute('role','tooltip');tmpTooltipElement.style.maxWidth=pOptions.maxWidth;if(pOptions.interactive){tmpTooltipElement.classList.add('pict-modal-tooltip-interactive');}// Arrow
+	 */_attachTooltip(pElement,pContent,pIsHTML,pOptions){let tmpTooltipElement=null;let tmpShowTimeout=null;let tmpHideTimeout=null;let tmpDestroyed=false;let tmpId=this._modal._nextId();// Pin state — only meaningful when pOptions.pinnable is set. A pinned
+// tooltip stays visible (transient hide is suppressed) and follows its
+// anchor on scroll/resize.
+let tmpPinned=false;let tmpShow=()=>{if(tmpDestroyed||tmpTooltipElement){return;}tmpTooltipElement=document.createElement('div');tmpTooltipElement.className='pict-modal-tooltip pict-modal-tooltip--'+pOptions.position;tmpTooltipElement.id='pict-modal-tooltip-'+tmpId;tmpTooltipElement.setAttribute('role','tooltip');tmpTooltipElement.style.maxWidth=pOptions.maxWidth;if(pOptions.interactive){tmpTooltipElement.classList.add('pict-modal-tooltip-interactive');}// Optional consumer-supplied class(es) on the tooltip element, e.g.
+// to theme the bubble + arrow by overriding the --pict-modal-tooltip-*
+// custom properties for a specific tooltip.
+if(pOptions.className){let tmpExtraClasses=String(pOptions.className).split(/\s+/);for(let i=0;i<tmpExtraClasses.length;i++){if(tmpExtraClasses[i]){tmpTooltipElement.classList.add(tmpExtraClasses[i]);}}}// Arrow
 let tmpArrow=document.createElement('div');tmpArrow.className='pict-modal-tooltip-arrow';// Content
 let tmpContentDiv=document.createElement('div');if(pIsHTML){tmpContentDiv.innerHTML=pContent;}else{tmpContentDiv.textContent=pContent;}tmpTooltipElement.appendChild(tmpArrow);tmpTooltipElement.appendChild(tmpContentDiv);document.body.appendChild(tmpTooltipElement);// Set aria-describedby on target
 pElement.setAttribute('aria-describedby',tmpTooltipElement.id);// Position
-this._positionTooltip(tmpTooltipElement,pElement,pOptions.position);// Animate in
-void tmpTooltipElement.offsetHeight;tmpTooltipElement.classList.add('pict-modal-visible');// Track
+this._positionTooltip(tmpTooltipElement,pElement,pOptions.position);// Animate in — but only paint when the anchor is actually rendered.
+// A pinned / startPinned tooltip whose anchor lives in a hidden
+// container (e.g. an inactive tab panel) would otherwise show at the
+// clamped corner as an orphan. It is revealed later by tmpReposition
+// once the anchor gains a layout box (see the ResizeObserver below).
+void tmpTooltipElement.offsetHeight;if(this._isElementRendered(pElement)){tmpTooltipElement.classList.add('pict-modal-visible');}// Track
 this._modal._activeTooltips.push({element:tmpTooltipElement,targetElement:pElement,destroy:tmpDestroy});// For interactive tooltips, allow hovering over the tooltip itself
-if(pOptions.interactive&&tmpTooltipElement){tmpTooltipElement.addEventListener('mouseenter',()=>{if(tmpHideTimeout){clearTimeout(tmpHideTimeout);tmpHideTimeout=null;}});tmpTooltipElement.addEventListener('mouseleave',()=>{tmpHide();});}};let tmpHide=()=>{if(!tmpTooltipElement){return;}tmpTooltipElement.classList.remove('pict-modal-visible');let tmpEl=tmpTooltipElement;tmpTooltipElement=null;// Remove aria
+if(pOptions.interactive&&tmpTooltipElement){tmpTooltipElement.addEventListener('mouseenter',()=>{if(tmpHideTimeout){clearTimeout(tmpHideTimeout);tmpHideTimeout=null;}});tmpTooltipElement.addEventListener('mouseleave',()=>{if(!tmpPinned){tmpHide();}});}// Reflect pinned state on a freshly-(re)created element.
+if(tmpPinned&&tmpTooltipElement){tmpTooltipElement.classList.add('pict-modal-tooltip-pinned');}};let tmpHide=()=>{if(!tmpTooltipElement){return;}tmpTooltipElement.classList.remove('pict-modal-visible');let tmpEl=tmpTooltipElement;tmpTooltipElement=null;// Remove aria
 pElement.removeAttribute('aria-describedby');// Remove from tracking
-this._modal._activeTooltips=this._modal._activeTooltips.filter(pEntry=>{return pEntry.element!==tmpEl;});setTimeout(()=>{if(tmpEl.parentNode){tmpEl.parentNode.removeChild(tmpEl);}},220);};let tmpOnMouseEnter=()=>{if(tmpHideTimeout){clearTimeout(tmpHideTimeout);tmpHideTimeout=null;}tmpShowTimeout=setTimeout(tmpShow,pOptions.delay);};let tmpOnMouseLeave=()=>{if(tmpShowTimeout){clearTimeout(tmpShowTimeout);tmpShowTimeout=null;}// Small delay before hiding to allow moving to interactive tooltip
-if(pOptions.interactive){tmpHideTimeout=setTimeout(tmpHide,100);}else{tmpHide();}};let tmpOnFocusIn=()=>{tmpShowTimeout=setTimeout(tmpShow,pOptions.delay);};let tmpOnFocusOut=()=>{if(tmpShowTimeout){clearTimeout(tmpShowTimeout);tmpShowTimeout=null;}tmpHide();};// Attach listeners
-pElement.addEventListener('mouseenter',tmpOnMouseEnter);pElement.addEventListener('mouseleave',tmpOnMouseLeave);pElement.addEventListener('focusin',tmpOnFocusIn);pElement.addEventListener('focusout',tmpOnFocusOut);let tmpDestroy=()=>{if(tmpDestroyed){return;}tmpDestroyed=true;if(tmpShowTimeout){clearTimeout(tmpShowTimeout);}if(tmpHideTimeout){clearTimeout(tmpHideTimeout);}tmpHide();pElement.removeEventListener('mouseenter',tmpOnMouseEnter);pElement.removeEventListener('mouseleave',tmpOnMouseLeave);pElement.removeEventListener('focusin',tmpOnFocusIn);pElement.removeEventListener('focusout',tmpOnFocusOut);};return{destroy:tmpDestroy};}/**
+this._modal._activeTooltips=this._modal._activeTooltips.filter(pEntry=>{return pEntry.element!==tmpEl;});setTimeout(()=>{if(tmpEl.parentNode){tmpEl.parentNode.removeChild(tmpEl);}},220);};let tmpOnMouseEnter=()=>{if(tmpHideTimeout){clearTimeout(tmpHideTimeout);tmpHideTimeout=null;}tmpShowTimeout=setTimeout(tmpShow,pOptions.delay);};let tmpOnMouseLeave=()=>{if(tmpShowTimeout){clearTimeout(tmpShowTimeout);tmpShowTimeout=null;}// A pinned tooltip stays open regardless of pointer.
+if(tmpPinned){return;}// Small delay before hiding to allow moving to interactive tooltip
+if(pOptions.interactive){tmpHideTimeout=setTimeout(tmpHide,100);}else{tmpHide();}};let tmpOnFocusIn=()=>{tmpShowTimeout=setTimeout(tmpShow,pOptions.delay);};let tmpOnFocusOut=()=>{if(tmpShowTimeout){clearTimeout(tmpShowTimeout);tmpShowTimeout=null;}// A pinned tooltip stays open regardless of focus.
+if(tmpPinned){return;}tmpHide();};// -- Pin lifecycle (opt-in via pOptions.pinnable) --
+// Keep a pinned tooltip glued to its anchor as the page scrolls/resizes.
+// The element is position:fixed and portaled to <body>, so it does not
+// move with the document on its own. When the anchor scrolls out of the
+// viewport we fade the tooltip out (without dropping the pin) and bring
+// it back when the anchor returns.
+let tmpResizeObserver=null;let tmpReposition=()=>{if(!tmpTooltipElement){return;}let tmpRect=pElement.getBoundingClientRect();// Rendered (has a layout box) AND within the viewport. A hidden anchor
+// (display:none, or inside a hidden tab panel) has no box, so the
+// tooltip is hidden rather than stranded at the clamped corner.
+let tmpInView=this._isElementRendered(pElement)&&tmpRect.bottom>0&&tmpRect.top<window.innerHeight&&tmpRect.right>0&&tmpRect.left<window.innerWidth;if(tmpInView){this._positionTooltip(tmpTooltipElement,pElement,pOptions.position);tmpTooltipElement.classList.add('pict-modal-visible');}else{tmpTooltipElement.classList.remove('pict-modal-visible');}};let tmpAddRepositionListeners=()=>{// `true` (capture) so scrolls inside any nested container reposition too.
+window.addEventListener('scroll',tmpReposition,true);window.addEventListener('resize',tmpReposition);// A ResizeObserver on the anchor catches it being shown/hidden (e.g. a
+// tab panel toggling display) — transitions the window scroll/resize
+// listeners miss — so a pinned tooltip appears the moment its anchor
+// gains a layout box and hides again when it loses one.
+if(typeof ResizeObserver!=='undefined'){tmpResizeObserver=new ResizeObserver(()=>tmpReposition());tmpResizeObserver.observe(pElement);}};let tmpRemoveRepositionListeners=()=>{window.removeEventListener('scroll',tmpReposition,true);window.removeEventListener('resize',tmpReposition);if(tmpResizeObserver){tmpResizeObserver.disconnect();tmpResizeObserver=null;}};let tmpPin=()=>{if(tmpPinned||tmpDestroyed){return;}tmpPinned=true;if(!tmpTooltipElement){tmpShow();}if(tmpTooltipElement){tmpTooltipElement.classList.add('pict-modal-tooltip-pinned');}tmpAddRepositionListeners();if(typeof pOptions.onPinChange==='function'){pOptions.onPinChange(true,pElement);}};let tmpUnpin=()=>{if(!tmpPinned){return;}tmpPinned=false;tmpRemoveRepositionListeners();if(tmpTooltipElement){tmpTooltipElement.classList.remove('pict-modal-tooltip-pinned');}tmpHide();if(typeof pOptions.onPinChange==='function'){pOptions.onPinChange(false,pElement);}};let tmpOnClick=pEvent=>{if(pEvent){pEvent.preventDefault();pEvent.stopPropagation();}if(tmpPinned){tmpUnpin();}else{tmpPin();}};// Attach listeners
+pElement.addEventListener('mouseenter',tmpOnMouseEnter);pElement.addEventListener('mouseleave',tmpOnMouseLeave);pElement.addEventListener('focusin',tmpOnFocusIn);pElement.addEventListener('focusout',tmpOnFocusOut);if(pOptions.pinnable){pElement.addEventListener('click',tmpOnClick);}let tmpDestroy=()=>{if(tmpDestroyed){return;}tmpDestroyed=true;if(tmpShowTimeout){clearTimeout(tmpShowTimeout);}if(tmpHideTimeout){clearTimeout(tmpHideTimeout);}tmpRemoveRepositionListeners();tmpPinned=false;tmpHide();pElement.removeEventListener('mouseenter',tmpOnMouseEnter);pElement.removeEventListener('mouseleave',tmpOnMouseLeave);pElement.removeEventListener('focusin',tmpOnFocusIn);pElement.removeEventListener('focusout',tmpOnFocusOut);if(pOptions.pinnable){pElement.removeEventListener('click',tmpOnClick);}};// Optionally render already-pinned (explicit consumer opt-in).
+if(pOptions.pinnable&&pOptions.startPinned){tmpPin();}return{destroy:tmpDestroy,pin:tmpPin,unpin:tmpUnpin,isPinned:()=>{return tmpPinned;}};}/**
 	 * Position a tooltip element relative to the target element.
 	 * Flips direction if the tooltip would overflow the viewport.
 	 *
@@ -1094,6 +1157,14 @@ pElement.addEventListener('mouseenter',tmpOnMouseEnter);pElement.addEventListene
 if(tmpPosition==='top'&&tmpTargetRect.top<tmpTooltipRect.height+tmpGap){tmpPosition='bottom';}else if(tmpPosition==='bottom'&&window.innerHeight-tmpTargetRect.bottom<tmpTooltipRect.height+tmpGap){tmpPosition='top';}else if(tmpPosition==='left'&&tmpTargetRect.left<tmpTooltipRect.width+tmpGap){tmpPosition='right';}else if(tmpPosition==='right'&&window.innerWidth-tmpTargetRect.right<tmpTooltipRect.width+tmpGap){tmpPosition='left';}// Update class for arrow direction
 pTooltip.className=pTooltip.className.replace(/pict-modal-tooltip--\w+/,'pict-modal-tooltip--'+tmpPosition);let tmpTop=0;let tmpLeft=0;switch(tmpPosition){case'top':tmpTop=tmpTargetRect.top-tmpTooltipRect.height-tmpGap;tmpLeft=tmpTargetRect.left+tmpTargetRect.width/2-tmpTooltipRect.width/2;break;case'bottom':tmpTop=tmpTargetRect.bottom+tmpGap;tmpLeft=tmpTargetRect.left+tmpTargetRect.width/2-tmpTooltipRect.width/2;break;case'left':tmpTop=tmpTargetRect.top+tmpTargetRect.height/2-tmpTooltipRect.height/2;tmpLeft=tmpTargetRect.left-tmpTooltipRect.width-tmpGap;break;case'right':tmpTop=tmpTargetRect.top+tmpTargetRect.height/2-tmpTooltipRect.height/2;tmpLeft=tmpTargetRect.right+tmpGap;break;}// Clamp to viewport
 tmpLeft=Math.max(4,Math.min(tmpLeft,window.innerWidth-tmpTooltipRect.width-4));tmpTop=Math.max(4,Math.min(tmpTop,window.innerHeight-tmpTooltipRect.height-4));pTooltip.style.top=tmpTop+'px';pTooltip.style.left=tmpLeft+'px';}/**
+	 * Whether an element is currently rendered (has a layout box). Returns false
+	 * for a display:none element or one inside a display:none ancestor (e.g. an
+	 * inactive tab panel) — in which case a pinned tooltip should stay hidden
+	 * until the anchor reappears.
+	 *
+	 * @param {HTMLElement} pElement
+	 * @returns {boolean}
+	 */_isElementRendered(pElement){return!!(pElement&&typeof pElement.getClientRects==='function'&&pElement.getClientRects().length>0);}/**
 	 * Dismiss all active tooltips.
 	 */dismissAll(){let tmpTooltips=this._modal._activeTooltips.slice();for(let i=0;i<tmpTooltips.length;i++){tmpTooltips[i].destroy();}}}module.exports=PictModalTooltip;},{}],14:[function(require,module,exports){/**
  * Pict-Modal-Window
@@ -1148,7 +1219,7 @@ if(typeof pOptions.onOpen==='function'){pOptions.onOpen(pDialog);}}/**
 	 *
 	 * @param {string} pText
 	 * @returns {string}
-	 */_escapeHTML(pText){if(typeof pText!=='string'){return'';}return pText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}}module.exports=PictModalWindow;},{}],15:[function(require,module,exports){module.exports={"AutoInitialize":true,"AutoRender":false,"AutoSolveWithApp":false,"ViewIdentifier":"Pict-Section-Modal","OverlayClickDismisses":true,"DefaultConfirmOptions":{"title":"Confirm","confirmLabel":"OK","cancelLabel":"Cancel","dangerous":false,"unbounded":false},"DefaultDoubleConfirmOptions":{"title":"Are you sure?","confirmLabel":"Confirm","cancelLabel":"Cancel","phrasePrompt":"Type \"{phrase}\" to confirm:","confirmPhrase":"","unbounded":false},"DefaultModalOptions":{"title":"","content":"","buttons":[],"closeable":true,"width":"480px","unbounded":false},"DefaultTooltipOptions":{"position":"top","delay":200,"maxWidth":"300px","interactive":false},"DefaultToastOptions":{"type":"info","duration":3000,"position":"top-right","dismissible":true},"DefaultPanelOptions":{"position":"right","width":340,"minWidth":200,"maxWidth":600,"collapsible":true,"collapsed":false,"persist":false,"persistKey":""},"Templates":[],"Renderables":[],"CSS":/*css*/`
+	 */_escapeHTML(pText){if(typeof pText!=='string'){return'';}return pText.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}}module.exports=PictModalWindow;},{}],15:[function(require,module,exports){module.exports={"AutoInitialize":true,"AutoRender":false,"AutoSolveWithApp":false,"ViewIdentifier":"Pict-Section-Modal","OverlayClickDismisses":true,"DefaultConfirmOptions":{"title":"Confirm","confirmLabel":"OK","cancelLabel":"Cancel","dangerous":false,"unbounded":false},"DefaultDoubleConfirmOptions":{"title":"Are you sure?","confirmLabel":"Confirm","cancelLabel":"Cancel","phrasePrompt":"Type \"{phrase}\" to confirm:","confirmPhrase":"","unbounded":false},"DefaultModalOptions":{"title":"","content":"","buttons":[],"closeable":true,"width":"480px","unbounded":false},"DefaultTooltipOptions":{"position":"top","delay":200,"maxWidth":"300px","interactive":false,"pinnable":false,"startPinned":false},"DefaultToastOptions":{"type":"info","duration":3000,"position":"top-right","dismissible":true,"allowHTML":false},"DefaultPanelOptions":{"position":"right","width":340,"minWidth":200,"maxWidth":600,"collapsible":true,"collapsed":false,"persist":false,"persistKey":""},"Templates":[],"Renderables":[],"CSS":/*css*/`
 /* pict-section-modal */
 .pict-modal-root
 {
@@ -1199,6 +1270,7 @@ if(typeof pOptions.onOpen==='function'){pOptions.onOpen(pDialog);}}/**
 	--pict-modal-tooltip-fg:          var(--theme-color-text-primary,      #ffffff);
 	--pict-modal-tooltip-border-radius:4px;
 	--pict-modal-tooltip-shadow:      0 2px 8px rgba(0, 0, 0, 0.15);
+	--pict-modal-tooltip-pinned-ring: var(--theme-color-brand-primary, #2E7D74);
 
 	/* Dropdown */
 	--pict-modal-dropdown-bg:                 var(--theme-color-background-panel,  #ffffff);
@@ -1561,6 +1633,14 @@ if(typeof pOptions.onOpen==='function'){pOptions.onOpen(pDialog);}}/**
 	opacity: 1;
 }
 
+/* Pinned tooltips stay open and can be interacted with; a subtle ring
+   distinguishes a pinned tooltip from a transient hover tooltip. */
+.pict-modal-tooltip.pict-modal-tooltip-pinned
+{
+	pointer-events: auto;
+	box-shadow: var(--pict-modal-tooltip-shadow), 0 0 0 1px var(--pict-modal-tooltip-pinned-ring);
+}
+
 .pict-modal-tooltip-arrow
 {
 	position: absolute;
@@ -1622,6 +1702,16 @@ if(typeof pOptions.onOpen==='function'){pOptions.onOpen(pDialog);}}/**
 	transform: translateY(-4px);
 	transition: opacity var(--pict-modal-transition-duration) ease,
 	            transform var(--pict-modal-transition-duration) ease;
+}
+
+/* Free-form content popovers keep the dropdown chrome (bg / border / shadow /
+   flip / dismiss) but hand sizing + inner padding to the injected content, so a
+   pre-rendered template menu or a wide rich card isn't boxed by the menu
+   defaults. Cap width per-call via the maxWidth option. */
+.pict-modal-dropdown.pict-modal-dropdown--content
+{
+	max-width: none;
+	padding: 0;
 }
 
 .pict-modal-dropdown.pict-modal-dropdown--above { transform: translateY(4px); }
@@ -2554,7 +2644,16 @@ if(typeof document!=='undefined'&&document.body){if(!document.body.classList.con
 	 * @param {string} pHTMLContent - HTML content
 	 * @param {object} [pOptions] - Options { position, delay, maxWidth, interactive }
 	 * @returns {{ destroy: function }}
-	 */richTooltip(pElement,pHTMLContent,pOptions){return this._tooltip.richTooltip(pElement,pHTMLContent,pOptions);}// -- Toast API --
+	 */richTooltip(pElement,pHTMLContent,pOptions){return this._tooltip.richTooltip(pElement,pHTMLContent,pOptions);}/**
+	 * Attach a pinnable rich HTML tooltip to an element. Hover/focus behaves
+	 * like richTooltip(); a click on the element toggles a pinned state that
+	 * keeps the tooltip open and follows the anchor on scroll/resize.
+	 *
+	 * @param {HTMLElement} pElement - Target element
+	 * @param {string} pHTMLContent - HTML content
+	 * @param {object} [pOptions] - Options { position, delay, maxWidth, interactive, startPinned, onPinChange }
+	 * @returns {{ destroy: function, pin: function, unpin: function, isPinned: function }}
+	 */pinnableTooltip(pElement,pHTMLContent,pOptions){return this._tooltip.pinnableTooltip(pElement,pHTMLContent,pOptions);}// -- Toast API --
 /**
 	 * Show a toast notification.
 	 *
@@ -2564,13 +2663,16 @@ if(typeof document!=='undefined'&&document.body){if(!document.body.classList.con
 	 */toast(pMessage,pOptions){return this._toast.toast(pMessage,pOptions);}// -- Dropdown API --
 /**
 	 * Open an anchor-positioned dropdown menu (no backdrop, click-outside
-	 * dismisses). Useful for nav menus and split-button addenda.
+	 * dismisses). Useful for nav menus and split-button addenda. Pass
+	 * `ContentHTML` instead of `items` to render a free-form anchored popover
+	 * (rich card, pre-rendered template menu) with the same dismiss/flip behavior.
 	 *
 	 * @param {HTMLElement|string|object} pAnchor - Element, CSS selector, or
 	 *   { left, top, width, height } rect for context-menu style anchoring.
-	 * @param {object} pOptions - { items, align, position, minWidth, maxHeight,
-	 *   className, closeOnSelect, onSelect, onClose }
-	 * @returns {Promise<{Hash, Item}|null>} Selection or null on dismiss.
+	 * @param {object} pOptions - { items | ContentHTML, align, position, minWidth,
+	 *   maxWidth, maxHeight, className, closeOnSelect, onSelect, onClose }
+	 * @returns {Promise<{Hash, Item}|null>} Selection or null on dismiss
+	 *   (always resolves null in ContentHTML mode).
 	 */dropdown(pAnchor,pOptions){return this._dropdown.dropdown(pAnchor,pOptions);}/**
 	 * Dismiss any open dropdown.
 	 */dismissDropdowns(){this._dropdown.dismissAll();}// -- Panel API --
