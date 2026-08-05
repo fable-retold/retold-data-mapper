@@ -424,6 +424,37 @@ function _isChunkReplaySafe(pChunk, pEntity)
 	return true;
 }
 
+// IntersectRecords join modes. Inner is the historical behavior; LeftOuter
+// and Unmatched exist so the anti-join (target − source, i.e. the delete set)
+// is expressible as a declarative stage instead of a bespoke diff step.
+const JOIN_MODES = ['Inner', 'LeftOuter', 'Unmatched'];
+
+// Marker column stamped on every LeftOuter row so a following ExtractRecords
+// can split the two sets with a filter instead of inferring from a null.
+const MATCHED_FLAG_NAME = '_Matched';
+
+/**
+ * Can this value act as a join key?
+ *
+ * Absent and empty keys are the dangerous case. Both sides are stringified to
+ * index the join, so without this check a row with no key indexes under
+ * 'undefined' and joins any other row that also lacks one — two rows with
+ * nothing in common. In Inner mode that is a phantom enrichment; in the modes
+ * that emit unmatched rows it is a row queued for deletion because a field
+ * happened to be missing. Zero and '0' are legitimate keys and pass.
+ *
+ * @param {*} pValue - the raw join-key value off the record
+ * @return {boolean}
+ */
+function _isUsableJoinKey(pValue)
+{
+	if ((pValue === undefined) || (pValue === null))
+	{
+		return false;
+	}
+	return String(pValue).trim().length > 0;
+}
+
 let libTabularTransform = null;
 try
 {
@@ -3108,12 +3139,12 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 
 					'IntersectRecords':
 					{
-						Description: 'Join SourceRecords × RelatedRecords on a key, optionally OrderBy the related side and Limit per Source row, project a merged namespace (Source fields win on collision; Related fields override only when missing on Source). Use Limit=1 for enrichment-style joins (one related row attached per source); higher Limit + OrderBy for "latest N per X" patterns.',
+						Description: 'Join SourceRecords × RelatedRecords on a key, optionally OrderBy the related side and Limit per Source row, project a merged namespace (Source fields win on collision; Related fields override only when missing on Source). Use Limit=1 for enrichment-style joins (one related row attached per source); higher Limit + OrderBy for "latest N per X" patterns. JoinMode selects which rows are emitted: Inner (default, matched only), LeftOuter (matched + unmatched, each stamped _Matched true/false), or Unmatched (the anti-join — only source rows with no counterpart; make Source the target side and Related the incoming side and the output IS the delete set). Rows whose join field is absent or empty can never match and are NEVER emitted as unmatched — they are counted in UnkeyedSourceCount / UnkeyedRelatedCount instead.',
 						SettingsSchema:
 						[
 							{ Name: 'SourceRecords',          DataType: 'Array',  Required: true, Description: 'Records from the source pull.' },
 							{ Name: 'RelatedRecords',         DataType: 'Array',  Required: true, Description: 'Records from the related pull.' },
-							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ Entity, GUIDName?, GUIDTemplate?, JoinOn:{SourceField,RelatedField}, OrderBy?:[{Field,Direction}], Limit? (default unlimited), Projection }. Bundled to dodge UV template stripping.' }
+							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ Entity, GUIDName?, GUIDTemplate?, JoinOn:{SourceField,RelatedField}, JoinMode? (\'Inner\'|\'LeftOuter\'|\'Unmatched\', default \'Inner\'; an unrecognized value fails the task rather than silently running an inner join), OrderBy?:[{Field,Direction}], Limit? (default unlimited), Projection }. Bundled to dodge UV template stripping.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
@@ -3136,6 +3167,29 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpLimit = tmpCfg.Limit || 0;
 							let tmpProjection = tmpCfg.Projection || {};
 
+							// JoinMode decides which side of the join is emitted.
+							// An unrecognized value FAILS rather than falling back
+							// to Inner: a delete-set pass that quietly ran as an
+							// inner join would emit the rows meant to be KEPT, and
+							// the caller would delete exactly the wrong set.
+							let tmpJoinMode = tmpCfg.JoinMode || 'Inner';
+							if (JOIN_MODES.indexOf(tmpJoinMode) === -1)
+							{
+								return fHandlerCallback(new Error(`IntersectRecords: unrecognized JoinMode [${tmpJoinMode}]. Valid modes are ${JOIN_MODES.join(', ')}.`));
+							}
+							let tmpEmitMatched   = (tmpJoinMode === 'Inner') || (tmpJoinMode === 'LeftOuter');
+							let tmpEmitUnmatched = (tmpJoinMode === 'LeftOuter') || (tmpJoinMode === 'Unmatched');
+
+							// In Unmatched mode no emitted row has a related side,
+							// so a GUIDTemplate reading Related.* would resolve to
+							// '' on every row and collapse the whole output onto
+							// one GUID — which downstream is one upserted row
+							// instead of N, or one delete instead of N.
+							if ((tmpJoinMode === 'Unmatched') && tmpGUIDTemplate && /\{~D:Related\./.test(tmpGUIDTemplate))
+							{
+								return fHandlerCallback(new Error('IntersectRecords: JoinMode=Unmatched emits rows that have no related side, but GUIDTemplate references {~D:Related.*~} — every row would receive the same GUID. Build the GUID from Source fields.'));
+							}
+
 							if (!Array.isArray(tmpSource) || !Array.isArray(tmpRelated))
 							{
 								return fHandlerCallback(null, {
@@ -3151,12 +3205,20 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpGuardR = _checkRowCount('IntersectRecords (Related)', tmpRelated.length);
 							if (tmpGuardR) return fHandlerCallback(tmpGuardR);
 
-							// Index Related rows by RelatedField → [rows].
+							// Index Related rows by RelatedField → [rows]. Rows with
+							// no usable key are left out of the index entirely —
+							// they can only ever produce a phantom match.
 							let tmpIndex = {};
+							let tmpUnkeyedRelatedCount = 0;
 							for (let i = 0; i < tmpRelated.length; i++)
 							{
 								let tmpRow = tmpRelated[i];
 								if (!tmpRow) continue;
+								if (!_isUsableJoinKey(tmpRow[tmpRelField]))
+								{
+									tmpUnkeyedRelatedCount++;
+									continue;
+								}
 								let tmpKey = String(tmpRow[tmpRelField]);
 								if (!tmpIndex[tmpKey]) tmpIndex[tmpKey] = [];
 								tmpIndex[tmpKey].push(tmpRow);
@@ -3166,19 +3228,104 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpOut = [];
 							let tmpMatchedCount = 0;
 							let tmpUnmatchedCount = 0;
+							let tmpUnkeyedSourceCount = 0;
+							let tmpEmittedUnmatchedCount = 0;
+
+							// Project one output row. pRel is {} for an unmatched
+							// source row, so {~D:Related.X~} resolves to undefined
+							// instead of throwing on a missing object.
+							let fProjectRow = (pSrc, pRel, pMatched) =>
+							{
+								// Flat namespace per §6 Q3 decision: Related
+								// fields fill where Source has none; Source
+								// wins on collision (so the source row's
+								// identity columns aren't clobbered).
+								let tmpMerged = Object.assign({}, pRel, pSrc);
+								let tmpProjected = {};
+								for (let p = 0; p < tmpProjKeys.length; p++)
+								{
+									let tmpExpr = tmpProjection[tmpProjKeys[p]];
+									if (typeof tmpExpr === 'string')
+									{
+										// Accept three prefixes — Record.X (merged
+										// namespace, Source-wins-on-collision per
+										// §6 Q3), Source.X (force the source side),
+										// and Related.X (force the related side).
+										// Without Related/Source explicit access,
+										// any related field whose name collides
+										// with a source field is unreachable, and a
+										// projection that uses {~D:Related.X~}
+										// would otherwise pass through as a literal
+										// string and crash the upsert (HTTP 200
+										// from the bulk endpoint, but every row
+										// errors with "invalid input syntax").
+										let tmpMatchTpl = tmpExpr.match(/^\{~D:(Record|Source|Related)\.(\w+)~\}$/);
+										if (tmpMatchTpl)
+										{
+											let tmpScope = tmpMatchTpl[1];
+											let tmpField = tmpMatchTpl[2];
+											let tmpLookup = (tmpScope === 'Source') ? pSrc
+												: (tmpScope === 'Related') ? pRel
+												: tmpMerged;
+											tmpProjected[tmpProjKeys[p]] = tmpLookup[tmpField];
+										}
+										else if (tmpMerged.hasOwnProperty(tmpExpr)) { tmpProjected[tmpProjKeys[p]] = tmpMerged[tmpExpr]; }
+										else { tmpProjected[tmpProjKeys[p]] = tmpExpr; }
+									}
+									else { tmpProjected[tmpProjKeys[p]] = tmpExpr; }
+								}
+								if (tmpGUIDTemplate)
+								{
+									tmpProjected[tmpGUIDName] = tmpGUIDTemplate.replace(
+										/\{~D:(Record|Source|Related)\.(\w+)~\}/g,
+										(_m, pScope, pField) =>
+										{
+											let tmpLookup = (pScope === 'Source') ? pSrc
+												: (pScope === 'Related') ? pRel
+												: tmpMerged;
+											let tmpVal = tmpLookup[pField];
+											return (tmpVal === undefined || tmpVal === null) ? '' : String(tmpVal).replace(/[^A-Za-z0-9_]/g, '_');
+										});
+								}
+								// LeftOuter mixes both kinds of row in one set, so
+								// the consumer needs to tell them apart without
+								// guessing from a null related field — "unmatched"
+								// and "matched, related field genuinely empty" are
+								// otherwise identical.
+								if (tmpJoinMode === 'LeftOuter')
+								{
+									tmpProjected[MATCHED_FLAG_NAME] = pMatched;
+								}
+								return tmpProjected;
+							};
 
 							for (let s = 0; s < tmpSource.length; s++)
 							{
 								let tmpSrc = tmpSource[s];
 								if (!tmpSrc) continue;
+								let tmpSrcKeyUsable = _isUsableJoinKey(tmpSrc[tmpSrcField]);
 								let tmpKey = String(tmpSrc[tmpSrcField]);
-								let tmpMatches = (tmpIndex[tmpKey] || []).slice();
+								let tmpMatches = tmpSrcKeyUsable ? (tmpIndex[tmpKey] || []).slice() : [];
 								if (tmpMatches.length === 0)
 								{
 									tmpUnmatchedCount++;
+									if (!tmpSrcKeyUsable)
+									{
+										// "No key" is not evidence of "no counterpart".
+										// Emitting it would put a row into the delete
+										// set because a field was missing.
+										tmpUnkeyedSourceCount++;
+										continue;
+									}
+									if (tmpEmitUnmatched)
+									{
+										tmpEmittedUnmatchedCount++;
+										tmpOut.push(fProjectRow(tmpSrc, {}, false));
+									}
 									continue;
 								}
 								tmpMatchedCount++;
+								if (!tmpEmitMatched) continue;
 
 								// Sort matches per OrderBy (stable, multi-key).
 								if (tmpOrderBy.length > 0)
@@ -3206,73 +3353,34 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								// Emit one record per (source × matched related).
 								for (let m = 0; m < tmpMatches.length; m++)
 								{
-									let tmpRel = tmpMatches[m];
-									// Flat namespace per §6 Q3 decision: Related
-									// fields fill where Source has none; Source
-									// wins on collision (so the source row's
-									// identity columns aren't clobbered).
-									let tmpMerged = Object.assign({}, tmpRel, tmpSrc);
-									let tmpProjected = {};
-									for (let p = 0; p < tmpProjKeys.length; p++)
-									{
-										let tmpExpr = tmpProjection[tmpProjKeys[p]];
-										if (typeof tmpExpr === 'string')
-										{
-											// Accept three prefixes — Record.X (merged
-											// namespace, Source-wins-on-collision per
-											// §6 Q3), Source.X (force the source side),
-											// and Related.X (force the related side).
-											// Without Related/Source explicit access,
-											// any related field whose name collides
-											// with a source field is unreachable, and a
-											// projection that uses {~D:Related.X~}
-											// would otherwise pass through as a literal
-											// string and crash the upsert (HTTP 200
-											// from the bulk endpoint, but every row
-											// errors with "invalid input syntax").
-											let tmpMatchTpl = tmpExpr.match(/^\{~D:(Record|Source|Related)\.(\w+)~\}$/);
-											if (tmpMatchTpl)
-											{
-												let tmpScope = tmpMatchTpl[1];
-												let tmpField = tmpMatchTpl[2];
-												let tmpLookup = (tmpScope === 'Source') ? tmpSrc
-													: (tmpScope === 'Related') ? tmpRel
-													: tmpMerged;
-												tmpProjected[tmpProjKeys[p]] = tmpLookup[tmpField];
-											}
-											else if (tmpMerged.hasOwnProperty(tmpExpr)) { tmpProjected[tmpProjKeys[p]] = tmpMerged[tmpExpr]; }
-											else { tmpProjected[tmpProjKeys[p]] = tmpExpr; }
-										}
-										else { tmpProjected[tmpProjKeys[p]] = tmpExpr; }
-									}
-									if (tmpGUIDTemplate)
-									{
-										tmpProjected[tmpGUIDName] = tmpGUIDTemplate.replace(
-											/\{~D:(Record|Source|Related)\.(\w+)~\}/g,
-											(_m, pScope, pField) =>
-											{
-												let tmpLookup = (pScope === 'Source') ? tmpSrc
-													: (pScope === 'Related') ? tmpRel
-													: tmpMerged;
-												let tmpVal = tmpLookup[pField];
-												return (tmpVal === undefined || tmpVal === null) ? '' : String(tmpVal).replace(/[^A-Za-z0-9_]/g, '_');
-											});
-									}
-									tmpOut.push(tmpProjected);
+									tmpOut.push(fProjectRow(tmpSrc, tmpMatches[m], true));
 								}
 							}
 
 							let tmpElapsedMs = Date.now() - tmpStartMs;
+							let tmpLog = [`IntersectRecords[${tmpJoinMode}]: ${tmpSource.length} source × ${tmpRelated.length} related → ${tmpOut.length} rows (${tmpMatchedCount} sources matched, ${tmpUnmatchedCount} unmatched, ${tmpEmittedUnmatchedCount} unmatched emitted, Limit=${tmpLimit || '∞'}) in ${tmpElapsedMs}ms.`];
+							// Unkeyed rows are reported rather than silently
+							// dropped: on a delete-set pass they are exactly the
+							// rows a caller would otherwise never learn were
+							// excluded from consideration.
+							if (tmpUnkeyedSourceCount > 0 || tmpUnkeyedRelatedCount > 0)
+							{
+								tmpLog.push(`IntersectRecords[${tmpJoinMode}]: ${tmpUnkeyedSourceCount} source and ${tmpUnkeyedRelatedCount} related row(s) carry no usable value at their join field ('${tmpSrcField}' / '${tmpRelField}') — they cannot match and are never emitted as unmatched.`);
+							}
 							return fHandlerCallback(null, {
 								Outputs:
 								{
-									RecordCount:          tmpOut.length,
-									MatchedSourceCount:   tmpMatchedCount,
-									UnmatchedSourceCount: tmpUnmatchedCount,
-									ElapsedMs:            tmpElapsedMs,
-									Result:               JSON.stringify(tmpOut)
+									RecordCount:            tmpOut.length,
+									MatchedSourceCount:     tmpMatchedCount,
+									UnmatchedSourceCount:   tmpUnmatchedCount,
+									EmittedUnmatchedCount:  tmpEmittedUnmatchedCount,
+									UnkeyedSourceCount:     tmpUnkeyedSourceCount,
+									UnkeyedRelatedCount:    tmpUnkeyedRelatedCount,
+									JoinMode:               tmpJoinMode,
+									ElapsedMs:              tmpElapsedMs,
+									Result:                 JSON.stringify(tmpOut)
 								},
-								Log: [`IntersectRecords: ${tmpSource.length} source × ${tmpRelated.length} related → ${tmpOut.length} joined rows (${tmpMatchedCount} sources matched, ${tmpUnmatchedCount} unmatched, Limit=${tmpLimit || '∞'}) in ${tmpElapsedMs}ms.`]
+								Log: tmpLog
 							});
 						}
 					},
@@ -3331,6 +3439,9 @@ module.exports = DataMapperBeaconProvider;
 // Exposed for unit testing — pure helper, no instance state.
 module.exports._buildSortFilter = _buildSortFilter;
 module.exports._isRetryableWriteFailure = _isRetryableWriteFailure;
+module.exports._isUsableJoinKey = _isUsableJoinKey;
+module.exports.JOIN_MODES = JOIN_MODES;
+module.exports.MATCHED_FLAG_NAME = MATCHED_FLAG_NAME;
 module.exports._isChunkReplaySafe = _isChunkReplaySafe;
 module.exports._sanitizeForwardSession = _sanitizeForwardSession;
 module.exports._unnestRecordsHandler = _unnestRecordsHandler;
