@@ -1017,6 +1017,57 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							// flow through (with template substitution); otherwise
 							// the source record passes through as-is (the destination's
 							// schema decides what to keep on the upsert side).
+							// A projection value that is neither a single whole-record
+							// reference nor a bare source-column alias needs the full
+							// template grammar — multi-token composites, {~DataJson:~},
+							// solver expressions. Resolve those the way ExtractRecords
+							// does. Unavailable (no Pict parseTemplate) leaves the
+							// previous behavior, which writes such a value through as
+							// a literal.
+							let fResolveExpression = (pExpr, pSrcRec) =>
+							{
+								if (typeof pExpr !== 'string')
+								{
+									return pExpr;
+								}
+								// Ordered so the two forms that already worked keep
+								// their exact semantics — in particular the whole-
+								// reference branch copies the value rather than
+								// rendering it, which is what preserves numbers and
+								// booleans through the clone.
+								let tmpWholeReference = pExpr.match(/^\{~D:Record\.(\w+)~\}$/);
+								if (tmpWholeReference)
+								{
+									return pSrcRec[tmpWholeReference[1]];
+								}
+								if (pExpr.indexOf('{~') < 0)
+								{
+									return Object.prototype.hasOwnProperty.call(pSrcRec, pExpr) ? pSrcRec[pExpr] : pExpr;
+								}
+								if (tmpFable && typeof (tmpFable.parseTemplate) === 'function')
+								{
+									return tmpFable.parseTemplate(pExpr, pSrcRec);
+								}
+								return pExpr;
+							};
+							// The GUID template already handled multi-token composites of
+							// {~D:Record.<field>~}, and its missing-field-becomes-empty
+							// rule is load-bearing for existing configs, so that path is
+							// left alone. Only a template carrying some OTHER expression
+							// (a solver, a non-D provider, a dotted address) goes through
+							// the full grammar.
+							let tmpGUIDNeedsFullGrammar = tmpGUIDTemplate
+								&& (tmpGUIDTemplate.replace(/\{~D:Record\.\w+~\}/g, '').indexOf('{~') > -1);
+							let fResolveGUIDTemplate = (pSrcRec) =>
+							{
+								if (tmpGUIDNeedsFullGrammar && tmpFable && typeof (tmpFable.parseTemplate) === 'function')
+								{
+									return String(tmpFable.parseTemplate(tmpGUIDTemplate, pSrcRec));
+								}
+								return tmpGUIDTemplate.replace(
+									/\{~D:Record\.(\w+)~\}/g,
+									(_m, pField) => (pSrcRec[pField] === undefined || pSrcRec[pField] === null) ? '' : String(pSrcRec[pField]));
+							};
 							let fProject = (pSrcRec) =>
 							{
 								let tmpOut;
@@ -1025,15 +1076,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									tmpOut = {};
 									for (let k = 0; k < tmpProjKeys.length; k++)
 									{
-										let tmpExpr = tmpProjection[tmpProjKeys[k]];
-										if (typeof tmpExpr === 'string')
-										{
-											let tmpMatch = tmpExpr.match(/^\{~D:Record\.(\w+)~\}$/);
-											if (tmpMatch) { tmpOut[tmpProjKeys[k]] = pSrcRec[tmpMatch[1]]; }
-											else if (pSrcRec.hasOwnProperty(tmpExpr)) { tmpOut[tmpProjKeys[k]] = pSrcRec[tmpExpr]; }
-											else { tmpOut[tmpProjKeys[k]] = tmpExpr; }
-										}
-										else { tmpOut[tmpProjKeys[k]] = tmpExpr; }
+										tmpOut[tmpProjKeys[k]] = fResolveExpression(tmpProjection[tmpProjKeys[k]], pSrcRec);
 									}
 								}
 								else
@@ -1046,9 +1089,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								// resolve even when IDCustomer isn't in the projection.
 								if (tmpGUIDTemplate && tmpGUIDName)
 								{
-									tmpOut[tmpGUIDName] = tmpGUIDTemplate.replace(
-										/\{~D:Record\.(\w+)~\}/g,
-										(_m, pField) => (pSrcRec[pField] === undefined || pSrcRec[pField] === null) ? '' : String(pSrcRec[pField]));
+									tmpOut[tmpGUIDName] = fResolveGUIDTemplate(pSrcRec);
 								}
 								return tmpOut;
 							};
