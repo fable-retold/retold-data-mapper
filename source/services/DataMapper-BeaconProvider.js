@@ -1094,6 +1094,138 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								return tmpOut;
 							};
 
+							// ── Record chunking ──────────────────────────────
+							//
+							// One target row per ChunkSize projected records instead of
+							// one row per record. The target's per-row write cost is
+							// what dominates a large clone (meadow-endpoints upserts
+							// serially within a request), so collapsing 190K rows to
+							// ~380 is the throughput lever.
+							//
+							// Every chunk row carries the totals the whole stream is
+							// expected to produce, so a reader can prove the table is
+							// complete before it yields anything: ChunkCount rows,
+							// ordinals contiguous, RecordCounts summing to
+							// SourceRowCount. Without that a dropped write is
+							// undetectable and costs ChunkSize records rather than one.
+							let tmpChunkSize = parseInt(tmpOpCfg.ChunkSize, 10) || 0;
+							let tmpChunkBuffer = [];
+							let tmpChunkOrdinal = 0;
+							let tmpChunkCount = 0;
+							let tmpSourceRowCount = 0;
+							let tmpChunksWritten = 0;
+							let tmpEntityName = tmpOpCfg.Entity || tmpTargetEntity;
+
+							let fBuildChunkRow = (pRecords, pOrdinal) =>
+							{
+								let tmpRow =
+								{
+									EntityName:     tmpEntityName,
+									ChunkOrdinal:   pOrdinal,
+									ChunkCount:     tmpChunkCount,
+									RecordCount:    pRecords.length,
+									SourceRowCount: tmpSourceRowCount,
+									RecordsJSON:    JSON.stringify(pRecords)
+								};
+								if (tmpGUIDName)
+								{
+									tmpRow[tmpGUIDName] = `${tmpEntityName}-${String(pOrdinal).padStart(9, '0')}`;
+								}
+								return tmpRow;
+							};
+
+							// Drain whole chunks out of the buffer. The remainder stays
+							// buffered until the stream ends, so resident records never
+							// exceed ChunkSize + BatchSize.
+							let fDrainChunks = (pFlushPartial) =>
+							{
+								let tmpRows = [];
+								while (tmpChunkBuffer.length >= tmpChunkSize)
+								{
+									tmpRows.push(fBuildChunkRow(tmpChunkBuffer.splice(0, tmpChunkSize), tmpChunkOrdinal++));
+								}
+								if (pFlushPartial && (tmpChunkBuffer.length > 0))
+								{
+									tmpRows.push(fBuildChunkRow(tmpChunkBuffer.splice(0, tmpChunkBuffer.length), tmpChunkOrdinal++));
+								}
+								return tmpRows;
+							};
+
+							// Terminal report, shared by every way the stream ends.
+							// Chunked runs also report what the reader needs to prove
+							// completeness, and flag a stream that produced fewer
+							// records than the source count promised — the truncation
+							// mode that otherwise reports success.
+							let fFinish = () =>
+							{
+								let tmpOutputs =
+								{
+									Pulled: tmpTotalPulled, Written: tmpTotalWritten, Errors: tmpTotalErrors,
+									ElapsedMs: Date.now() - tmpStartMs, ErrorLog: tmpErrorLog.slice(0, 50)
+								};
+								let tmpLog = `CloneStream: ${tmpSourceEntity} → ${tmpTargetEntity} on [${tmpTargetBeacon}] — pulled ${tmpTotalPulled}, wrote ${tmpTotalWritten}, ${tmpTotalErrors} errors in ${Date.now() - tmpStartMs}ms.`;
+								if (tmpChunkSize > 0)
+								{
+									tmpOutputs.ChunkSize = tmpChunkSize;
+									tmpOutputs.ChunksWritten = tmpChunksWritten;
+									tmpOutputs.ChunkCount = tmpChunkCount;
+									tmpOutputs.SourceRowCount = tmpSourceRowCount;
+									tmpLog += ` ${tmpChunksWritten} of ${tmpChunkCount} chunk(s) at ${tmpChunkSize}/chunk.`;
+									if (tmpTotalPulled !== tmpSourceRowCount)
+									{
+										tmpOutputs.Errors = tmpTotalErrors + Math.abs(tmpSourceRowCount - tmpTotalPulled);
+										tmpErrorLog.push({ Phase: 'Stream', Error: `pulled ${tmpTotalPulled} of a counted ${tmpSourceRowCount} source rows — the stream ended early or the source changed under it.` });
+										tmpOutputs.ErrorLog = tmpErrorLog.slice(0, 50);
+									}
+								}
+								return fHandlerCallback(null, { Outputs: tmpOutputs, Log: [ tmpLog ] });
+							};
+
+							// Terminating on a zero read rather than a short one still
+							// owes the chunk buffer a flush.
+							let fFlushAndFinish = () =>
+							{
+								if (tmpChunkSize <= 0)
+								{
+									return fFinish();
+								}
+								let tmpRows = fDrainChunks(true);
+								if (tmpRows.length === 0)
+								{
+									return fFinish();
+								}
+								let tmpRecordsInFlush = 0;
+								for (let i = 0; i < tmpRows.length; i++)
+								{
+									tmpRecordsInFlush += tmpRows[i].RecordCount;
+								}
+								tmpSelf._dispatch(
+									{
+										Capability:  'MeadowProxy',
+										Action:      'Request',
+										Settings:    { Method: 'PUT', Path: `/1.0/${tmpTargetConn}/${tmpTargetEntity}/Upserts`, Body: JSON.stringify(tmpRows), RemoteUser: '' },
+										AffinityKey: tmpTargetBeacon,
+										RequireAffinityMatch: true,
+										TimeoutMs:   120000
+									},
+									(pFlushErr, pFlushResult) =>
+									{
+										let tmpFlushOut = (pFlushResult && pFlushResult.Outputs) || {};
+										let tmpStatus = tmpFlushOut.Status;
+										if (pFlushErr || ((typeof tmpStatus === 'number') && (tmpStatus >= 400)))
+										{
+											tmpTotalErrors += tmpRecordsInFlush;
+											tmpErrorLog.push({ Phase: 'Flush', Error: pFlushErr ? (pFlushErr.message || String(pFlushErr)) : `HTTP ${tmpStatus}` });
+										}
+										else
+										{
+											tmpTotalWritten += tmpRecordsInFlush;
+											tmpChunksWritten += tmpRows.length;
+										}
+										return fFinish();
+									});
+							};
+
 							// ── Loop ─────────────────────────────────────────
 							let fNextBatch = () =>
 							{
@@ -1136,10 +1268,11 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 										let tmpReadCount = tmpRecords.length;
 										if (tmpReadCount === 0)
 										{
-											return fHandlerCallback(null, {
-												Outputs: { Pulled: tmpTotalPulled, Written: tmpTotalWritten, Errors: tmpTotalErrors, ElapsedMs: Date.now() - tmpStartMs, ErrorLog: tmpErrorLog.slice(0, 50) },
-												Log: [`CloneStream: ${tmpSourceEntity} → ${tmpTargetEntity} on [${tmpTargetBeacon}] — pulled ${tmpTotalPulled}, wrote ${tmpTotalWritten}, ${tmpTotalErrors} errors in ${Date.now() - tmpStartMs}ms.`]
-											});
+											// A source whose row count is an exact multiple of
+											// BatchSize never produces a short read, so this is
+											// the terminating path — and it still owes the
+											// buffer a flush.
+											return fFlushAndFinish();
 										}
 
 										// Project this batch in place — the source array
@@ -1150,12 +1283,40 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 										for (let i = 0; i < tmpReadCount; i++) tmpProjected[i] = fProject(tmpRecords[i]);
 										tmpRecords = null;
 
+										// A short read is the stream's last batch, so it is
+										// also when a partial chunk has to be flushed.
+										let tmpIsLastBatch = (tmpReadCount < tmpBatchSize);
+										let tmpWriteRows = tmpProjected;
+										let tmpWriteRecords = tmpReadCount;
+										if (tmpChunkSize > 0)
+										{
+											for (let i = 0; i < tmpReadCount; i++)
+											{
+												tmpChunkBuffer.push(tmpProjected[i]);
+											}
+											tmpProjected = null;
+											tmpWriteRows = fDrainChunks(tmpIsLastBatch);
+											tmpWriteRecords = 0;
+											for (let i = 0; i < tmpWriteRows.length; i++)
+											{
+												tmpWriteRecords += tmpWriteRows[i].RecordCount;
+											}
+											// No whole chunk ready yet — keep buffering
+											// rather than issuing an empty upsert.
+											if (tmpWriteRows.length === 0)
+											{
+												tmpTotalPulled += tmpReadCount;
+												tmpOffset += tmpReadCount;
+												return tmpIsLastBatch ? fFlushAndFinish() : fNextBatch();
+											}
+										}
+
 										let tmpWritePath = `/1.0/${tmpTargetConn}/${tmpTargetEntity}/Upserts`;
 										tmpSelf._dispatch(
 											{
 												Capability:  'MeadowProxy',
 												Action:      'Request',
-												Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpProjected), RemoteUser: '' },
+												Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpWriteRows), RemoteUser: '' },
 												AffinityKey: tmpTargetBeacon,
 												RequireAffinityMatch: true,
 												TimeoutMs:   120000
@@ -1164,9 +1325,23 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											{
 												let tmpBatchPulled = tmpReadCount;
 												tmpProjected = null;
+												// Counts stay in RECORDS on both layouts. Chunked,
+												// meadow's per-row accounting is per chunk row, so
+												// a partial failure cannot say which records were
+												// lost — the whole upsert's records are counted
+												// errored rather than reporting an optimistic
+												// number nobody can verify.
+												let fRecordsFor = (pRowCount, pAllSucceeded) =>
+												{
+													if (tmpChunkSize <= 0)
+													{
+														return pRowCount;
+													}
+													return pAllSucceeded ? tmpWriteRecords : 0;
+												};
 												if (pWriteErr)
 												{
-													tmpTotalErrors += tmpBatchPulled;
+													tmpTotalErrors += (tmpChunkSize > 0) ? tmpWriteRecords : tmpBatchPulled;
 													tmpErrorLog.push({ Offset: tmpOffset, Error: pWriteErr.message || String(pWriteErr) });
 												}
 												else
@@ -1177,8 +1352,9 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 													let tmpHdrErrored   = parseInt(tmpHeaders['x-meadow-upsert-errored']   || tmpHeaders['X-Meadow-Upsert-Errored']   || '-1', 10);
 													if (tmpHdrSucceeded >= 0 && tmpHdrErrored >= 0)
 													{
-														tmpTotalWritten += tmpHdrSucceeded;
-														tmpTotalErrors  += tmpHdrErrored;
+														tmpTotalWritten += fRecordsFor(tmpHdrSucceeded, tmpHdrErrored === 0);
+														tmpTotalErrors  += (tmpChunkSize > 0) ? ((tmpHdrErrored > 0) ? tmpWriteRecords : 0) : tmpHdrErrored;
+														tmpChunksWritten += (tmpHdrErrored === 0) ? tmpWriteRows.length : 0;
 														if (tmpHdrErrored > 0)
 														{
 															let tmpRespBody = tmpWriteOut.Body;
@@ -1222,12 +1398,13 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 														let tmpStatus = tmpWriteOut.Status;
 														if (typeof tmpStatus === 'number' && tmpStatus >= 400)
 														{
-															tmpTotalErrors += tmpBatchPulled;
+															tmpTotalErrors += (tmpChunkSize > 0) ? tmpWriteRecords : tmpBatchPulled;
 															tmpErrorLog.push({ Offset: tmpOffset, Error: `HTTP ${tmpStatus}` });
 														}
 														else
 														{
-															tmpTotalWritten += tmpBatchPulled;
+															tmpTotalWritten += (tmpChunkSize > 0) ? tmpWriteRecords : tmpBatchPulled;
+															tmpChunksWritten += tmpWriteRows.length;
 														}
 													}
 												}
@@ -1242,16 +1419,54 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 												// Last batch (short read) → done.
 												if (tmpBatchPulled < tmpBatchSize)
 												{
-													return fHandlerCallback(null, {
-														Outputs: { Pulled: tmpTotalPulled, Written: tmpTotalWritten, Errors: tmpTotalErrors, ElapsedMs: Date.now() - tmpStartMs, ErrorLog: tmpErrorLog.slice(0, 50) },
-														Log: [`CloneStream: ${tmpSourceEntity} → ${tmpTargetEntity} on [${tmpTargetBeacon}] — pulled ${tmpTotalPulled}, wrote ${tmpTotalWritten}, ${tmpTotalErrors} errors in ${Date.now() - tmpStartMs}ms.`]
-													});
+													return fFinish();
 												}
 												tmpOffset += tmpBatchPulled;
 												return fNextBatch();
 											});
 									});
 							};
+
+							// Chunked runs count the source before streaming it, so
+							// every chunk row can carry the totals a reader needs to
+							// prove the table complete. It also gives the stream its
+							// own truncation check. Count and stream are not one
+							// transaction — against a source being written
+							// concurrently they diverge, and fFinish reports that
+							// rather than absorbing it.
+							if (tmpChunkSize > 0)
+							{
+								let tmpCountPath = `/1.0/${tmpSourceConn}/${tmpSourceEntity}s/Count${tmpUserFilter ? '/FilteredTo/' + tmpUserFilter : ''}`;
+								tmpSelf._dispatch(
+									{
+										Capability:  'MeadowProxy',
+										Action:      'Request',
+										Settings:    { Method: 'GET', Path: tmpCountPath, Body: '', RemoteUser: '' },
+										AffinityKey: tmpSourceBeacon,
+										RequireAffinityMatch: true,
+										TimeoutMs:   60000
+									},
+									(pCountErr, pCountResult) =>
+									{
+										if (pCountErr)
+										{
+											return fHandlerCallback(null, {
+												Outputs: { Pulled: 0, Written: 0, Errors: 0, ElapsedMs: Date.now() - tmpStartMs, ErrorLog: [ { Phase: 'Count', Error: pCountErr.message } ] },
+												Log: [`CloneStream: source count failed — ${pCountErr.message}. A chunked write cannot be verified without it, so nothing was written.`]
+											});
+										}
+										let tmpCountOut = (pCountResult && pCountResult.Outputs) || {};
+										let tmpCountBody = tmpCountOut.Body;
+										if (typeof tmpCountBody === 'string')
+										{
+											try { tmpCountBody = JSON.parse(tmpCountBody); } catch (e) { tmpCountBody = {}; }
+										}
+										tmpSourceRowCount = parseInt((tmpCountBody || {}).Count, 10) || 0;
+										tmpChunkCount = Math.ceil(tmpSourceRowCount / tmpChunkSize);
+										return fNextBatch();
+									});
+								return;
+							}
 
 							fNextBatch();
 						}
