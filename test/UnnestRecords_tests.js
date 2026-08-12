@@ -150,9 +150,19 @@ suite
 					libAssert.match(tmpErr.message, /ArrayPath is required/);
 				});
 
-				test('non-array Records does not throw', function ()
+				test('Records that cannot become an array fails the task', function ()
 				{
-					let tmpOut = invoke(_ctx.handlers['DataMapperTransform:UnnestRecords'], { Records: 'not-an-array', OperationConfiguration: CFG });
+					// This used to resolve to [] and report success. A caller could not tell it
+					// from a real empty result, which is how an unresolved upstream handoff became
+					// a silent zero-record run.
+					let tmpErr = invokeExpectError(_ctx.handlers['DataMapperTransform:UnnestRecords'], { Records: 'not-an-array', OperationConfiguration: CFG });
+					libAssert.ok(tmpErr instanceof Error);
+					libAssert.match(tmpErr.message, /Records/);
+				});
+
+				test('a genuinely empty Records set still succeeds with zero rows', function ()
+				{
+					let tmpOut = invoke(_ctx.handlers['DataMapperTransform:UnnestRecords'], { Records: '[]', OperationConfiguration: CFG });
 					libAssert.strictEqual(tmpOut.RecordCount, 0);
 				});
 			}
