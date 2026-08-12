@@ -63,6 +63,179 @@ function _checkRowCount(pAction, pCount)
 }
 
 /**
+ * Truncated, quote-safe rendering of a setting value for an error message.
+ *
+ * @param {*} pValue
+ * @return {string}
+ */
+function _describeSettingValue(pValue)
+{
+	if (typeof (pValue) === 'string')
+	{
+		return (pValue.length > 120) ? `string(${pValue.length}) starting '${pValue.slice(0, 120)}'` : `string '${pValue}'`;
+	}
+	return `${Array.isArray(pValue) ? 'array' : typeof (pValue)} ${String(pValue).slice(0, 120)}`;
+}
+
+/**
+ * An unresolved UV template still carries its own delimiters, which is the single most
+ * likely cause of a records setting arriving unusable — the upstream node produced nothing
+ * for the address the template names.
+ *
+ * @param {*} pValue
+ * @return {boolean}
+ */
+function _looksLikeUnresolvedTemplate(pValue)
+{
+	return (typeof (pValue) === 'string') && (pValue.indexOf('{~') > -1);
+}
+
+/**
+ * Render a dispatch status for an error message; the MeadowProxy result does not always
+ * carry one.
+ *
+ * @param {*} pStatus
+ * @return {string}
+ */
+function _describeStatus(pStatus)
+{
+	return (typeof (pStatus) === 'number') ? `HTTP ${pStatus}` : 'no HTTP status';
+}
+
+/**
+ * Resolve one page of a paginated pull into its records.
+ *
+ * A failed read answers with something that is not an array — a 404 error object when the
+ * connection or the entity's endpoint is gone, or an HTTP 200 carrying `{Error: ...}`, which
+ * is how the platform API reports an auth failure. Coercing either to [] makes the page look
+ * short, so the pull stops and emits '[]' — manufacturing the one value every downstream
+ * guard is built to trust as a genuine empty result.
+ *
+ * @param {*} pStatus - HTTP status reported by the MeadowProxy dispatch
+ * @param {*} pBody - the response body, raw
+ * @param {number} pOffset - the batch offset, for the message
+ * @return {Array} the page's records — [] only when the source really returned none
+ * @throws {Error} when the body is not an array of records
+ */
+function _resolvePullBody(pStatus, pBody, pOffset)
+{
+	let tmpBody = pBody;
+	if (typeof (tmpBody) === 'string')
+	{
+		try
+		{
+			tmpBody = JSON.parse(tmpBody);
+		}
+		catch (pParseError)
+		{
+			throw new Error(`PullRecords: source returned an unparseable body at offset ${pOffset} (${_describeStatus(pStatus)}). ${pParseError.message}. Received ${_describeSettingValue(pBody)}.`);
+		}
+	}
+	if (Array.isArray(tmpBody))
+	{
+		return tmpBody;
+	}
+	if (tmpBody && (typeof (tmpBody) === 'object') && (tmpBody.Error !== undefined))
+	{
+		throw new Error(`PullRecords: the source answered ${_describeStatus(pStatus)} with an error payload at offset ${pOffset} — ${_describeSettingValue(tmpBody.Error)}. No rows were read.`);
+	}
+	throw new Error(`PullRecords: source returned a body that is not an array of records at offset ${pOffset} (${_describeStatus(pStatus)}). Received ${_describeSettingValue(tmpBody)}.`);
+}
+
+/**
+ * Resolve a records setting, separating a genuinely empty input from one that never arrived.
+ *
+ * Transform actions receive their records as a UV template addressing an upstream node's
+ * output, so the setting crosses the State edge as a JSON string. Every action that emits
+ * records emits '[]' when it has none — so absent, blank, unparseable or non-array is never
+ * "no rows", it is a handoff that did not happen. Substituting [] for it yields zero records
+ * and a `succeeded` task, which no caller can tell from a real empty result.
+ *
+ * A caller for whom an unavailable input IS acceptable wires the node's Error port; that makes
+ * the tolerance explicit in the operation graph instead of hiding it here.
+ *
+ * @param {string} pAction - action name, for the message
+ * @param {string} pSettingName - the setting being resolved
+ * @param {*} pValue - the raw setting value
+ * @return {Array} the records — [] only when the input really was empty
+ * @throws {Error} when the setting did not resolve to an array
+ */
+function _resolveRecordsSetting(pAction, pSettingName, pValue)
+{
+	if (Array.isArray(pValue))
+	{
+		return pValue;
+	}
+	if ((pValue === undefined) || (pValue === null) || (pValue === ''))
+	{
+		throw new Error(
+			`${pAction}: required setting [${pSettingName}] did not resolve. An upstream action with no rows sends '[]', so this is a missing handoff rather than an empty result. ` +
+			`Received ${_describeSettingValue(pValue)}.`);
+	}
+	if (typeof (pValue) === 'string')
+	{
+		let tmpParsed = null;
+		try
+		{
+			tmpParsed = JSON.parse(pValue);
+		}
+		catch (pParseError)
+		{
+			throw new Error(
+				`${pAction}: required setting [${pSettingName}] is not parseable JSON` +
+				(_looksLikeUnresolvedTemplate(pValue) ? ' and still contains template delimiters, so the upstream node output it addresses was never produced' : '') +
+				`. ${pParseError.message}. Received ${_describeSettingValue(pValue)}.`);
+		}
+		if (!Array.isArray(tmpParsed))
+		{
+			throw new Error(`${pAction}: required setting [${pSettingName}] parsed to ${(tmpParsed === null) ? 'null' : typeof (tmpParsed)} rather than an array of records.`);
+		}
+		return tmpParsed;
+	}
+	throw new Error(`${pAction}: required setting [${pSettingName}] must be an array or a JSON string; received ${_describeSettingValue(pValue)}.`);
+}
+
+/**
+ * Resolve a configuration-object setting under the same rule as the records settings: an
+ * absent or unparseable config silently defaulting to {} runs the action with an empty
+ * projection, which writes records stripped of every field and still reports success.
+ *
+ * @param {string} pAction - action name, for the message
+ * @param {string} pSettingName - the setting being resolved
+ * @param {*} pValue - the raw setting value
+ * @return {Object} the configuration
+ * @throws {Error} when the setting did not resolve to an object
+ */
+function _resolveConfigSetting(pAction, pSettingName, pValue)
+{
+	if ((pValue === undefined) || (pValue === null) || (pValue === ''))
+	{
+		throw new Error(`${pAction}: required setting [${pSettingName}] did not resolve; running with an empty configuration would project every record to nothing. Received ${_describeSettingValue(pValue)}.`);
+	}
+	if (typeof (pValue) === 'string')
+	{
+		let tmpParsed = null;
+		try
+		{
+			tmpParsed = JSON.parse(pValue);
+		}
+		catch (pParseError)
+		{
+			throw new Error(
+				`${pAction}: required setting [${pSettingName}] is not parseable JSON` +
+				(_looksLikeUnresolvedTemplate(pValue) ? ' and still contains template delimiters, so the value it addresses was never produced' : '') +
+				`. ${pParseError.message}. Received ${_describeSettingValue(pValue)}.`);
+		}
+		pValue = tmpParsed;
+	}
+	if (!pValue || (typeof (pValue) !== 'object') || Array.isArray(pValue))
+	{
+		throw new Error(`${pAction}: required setting [${pSettingName}] must be an object; received ${_describeSettingValue(pValue)}.`);
+	}
+	return pValue;
+}
+
+/**
  * Resolve a dotted path against an object (UnnestRecords ArrayPath / template lookup).
  * @param {object} pRoot
  * @param {string} pPath - e.g. 'FormData.MoistureTable' or 'Element.MoistureOvenHotPlate'
@@ -167,16 +340,20 @@ function _unnestRecordsHandler(pWorkItem, fHandlerCallback, pFable, pTabularTran
 {
 	let tmpStartMs = Date.now();
 	let tmpSettings = pWorkItem.Settings || {};
-	let tmpRecords = tmpSettings.Records || [];
-	let tmpCfg = tmpSettings.OperationConfiguration || {};
-	if (typeof (tmpRecords) === 'string') { try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { pFable.log.error(`UnnestRecords: Records parse error: ${e.message}`); tmpRecords = []; } }
-	if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { pFable.log.error(`UnnestRecords: OperationConfiguration parse error: ${e.message}`); tmpCfg = {}; } }
-
-	if (Array.isArray(tmpRecords))
+	let tmpRecords = null;
+	let tmpCfg = null;
+	try
 	{
-		let tmpGuard = pCheckRowCount('UnnestRecords', tmpRecords.length);
-		if (tmpGuard) { return fHandlerCallback(tmpGuard); }
+		tmpRecords = _resolveRecordsSetting('UnnestRecords', 'Records', tmpSettings.Records);
+		tmpCfg = _resolveConfigSetting('UnnestRecords', 'OperationConfiguration', tmpSettings.OperationConfiguration);
 	}
+	catch (pSettingError)
+	{
+		return fHandlerCallback(pSettingError);
+	}
+
+	let tmpGuard = pCheckRowCount('UnnestRecords', tmpRecords.length);
+	if (tmpGuard) { return fHandlerCallback(tmpGuard); }
 
 	let tmpEntity = tmpCfg.Entity || 'Record';
 	let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
@@ -187,13 +364,6 @@ function _unnestRecordsHandler(pWorkItem, fHandlerCallback, pFable, pTabularTran
 	let tmpFilter = tmpCfg.Filter || null;
 	let tmpSolvers = Array.isArray(tmpCfg.Solvers) ? tmpCfg.Solvers : [];
 
-	if (!Array.isArray(tmpRecords))
-	{
-		return fHandlerCallback(null, {
-			Outputs: { Result: '[]', RecordCount: 0, ElementCount: 0, FilteredOutCount: 0, SkippedNoArray: 0, Errors: [] },
-			Log: [`UnnestRecords: input Records was not an array (got ${typeof (tmpRecords)}).`]
-		});
-	}
 	if (!tmpArrayPath)
 	{
 		return fHandlerCallback(new Error('UnnestRecords: OperationConfiguration.ArrayPath is required (dotted path to the array-of-objects column).'));
@@ -792,6 +962,21 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpBatchSize = tmpSettings.BatchSize || 500;
 							let tmpForwardSession = _sanitizeForwardSession(tmpSettings.Session);
 
+							let tmpMissingSettings = [];
+							if (!tmpBeaconName) { tmpMissingSettings.push('SourceBeaconName'); }
+							if (!tmpConnectionHash) { tmpMissingSettings.push('ConnectionHash'); }
+							if (!tmpEntity) { tmpMissingSettings.push('Entity'); }
+							if (tmpMissingSettings.length > 0)
+							{
+								return fHandlerCallback(new Error(
+									`PullRecords: required setting${(tmpMissingSettings.length > 1) ? 's' : ''} [${tmpMissingSettings.join(', ')}] did not resolve. ` +
+									'A pull that cannot address a source has not read an empty source.'));
+							}
+							if (!tmpSelf._Client)
+							{
+								return fHandlerCallback(new Error(`PullRecords: no ultravisor client is connected, so [${tmpEntity}] on beacon [${tmpBeaconName}] was never read.`));
+							}
+
 							// Stable-pagination guard. Without an explicit sort,
 							// postgres LIMIT/OFFSET against a 250K-row table
 							// returns rows in unstable seq-scan order — the same
@@ -806,14 +991,6 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								? tmpUserFilter + '~' + tmpSortFilter
 								: tmpSortFilter;
 							let tmpFilterSegment = '/FilteredTo/' + tmpCombinedFilter;
-
-							if (!tmpSelf._Client || !tmpBeaconName || !tmpConnectionHash || !tmpEntity)
-							{
-								return fHandlerCallback(null, {
-									Outputs: { Records: [], RecordCount: 0, ElapsedMs: 0 },
-									Log: ['PullRecords: missing required settings.']
-								});
-							}
 
 							// Paginated read.
 							//
@@ -860,10 +1037,9 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										if (pError)
 										{
-											return fHandlerCallback(null, {
-												Outputs: { Records: tmpAllRecords, RecordCount: tmpAllRecords.length, ElapsedMs: Date.now() - tmpStartMs },
-												Log: [`PullRecords: read error at offset ${tmpOffset}: ${pError.message}`]
-											});
+											return fHandlerCallback(new Error(
+												`PullRecords: read failed at offset ${tmpOffset} on [${tmpPath}] — ${pError.message}. ` +
+												`${tmpAllRecords.length} record(s) had been read; a partial pull is not a result.`));
 										}
 
 										let tmpOutputs = (pResult && pResult.Outputs) || pResult || {};
@@ -877,28 +1053,34 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											tmpUseSortFilter = false;
 											return fReadBatch();
 										}
-										// retry, or propagate error, on pull failure
-										if (typeof (tmpStatus) === 'number' && tmpStatus >= 500)
+										// Retry a server-side fault, then fail. Every other non-2xx
+										// fails on the spot: a 404 is the likeliest shape of a
+										// deleted connection or an endpoint that was never
+										// re-enabled after a beacon redeploy, and it reads
+										// exactly like "no rows" if it is allowed through.
+										if (typeof (tmpStatus) === 'number' && ((tmpStatus < 200) || (tmpStatus >= 300)))
 										{
-											if (tmpBatchRetries < 2)
+											if ((tmpStatus >= 500) && (tmpBatchRetries < 2))
 											{
 												tmpBatchRetries++;
 												tmpFable.log.warn(`PullRecords: HTTP ${tmpStatus} at offset ${tmpOffset} — retry ${tmpBatchRetries}/2 in ${tmpBatchRetries}s.`);
 												return setTimeout(fReadBatch, tmpBatchRetries * 1000);
 											}
-											return fHandlerCallback(null, {
-												Outputs: { Records: [], Pulled: tmpAllRecords.length, Errors: 1,
-													ErrorLog: [ { Offset: tmpOffset, Status: tmpStatus, Attempts: tmpBatchRetries + 1, Error: `source read failed: HTTP ${tmpStatus} at offset ${tmpOffset} after ${tmpBatchRetries + 1} attempts`, Body: String(tmpOutputs.Body || '').slice(0, 300) } ] },
-												Log: [`PullRecords: source returned HTTP ${tmpStatus} at offset ${tmpOffset} after ${tmpBatchRetries + 1} attempts — failing the pull (check SortField/route).`]
-											});
+											return fHandlerCallback(new Error(
+												`PullRecords: source returned HTTP ${tmpStatus} at offset ${tmpOffset} on [${tmpPath}] after ${tmpBatchRetries + 1} attempt(s) — failing the pull. ` +
+												((tmpStatus === 404) ? 'A 404 here is most often a deleted source connection, or an entity whose dynamic endpoint is not enabled on the source beacon. ' : '') +
+												`Body: ${_describeSettingValue(tmpOutputs.Body)}`));
 										}
 										tmpBatchRetries = 0;
-										let tmpBody = tmpOutputs.Body;
-										if (typeof (tmpBody) === 'string')
+										let tmpRecords = null;
+										try
 										{
-											try { tmpBody = JSON.parse(tmpBody); } catch (e) { tmpBody = []; }
+											tmpRecords = _resolvePullBody(tmpStatus, tmpOutputs.Body, tmpOffset);
 										}
-										let tmpRecords = Array.isArray(tmpBody) ? tmpBody : [];
+										catch (pBodyError)
+										{
+											return fHandlerCallback(pBodyError);
+										}
 
 										for (let i = 0; i < tmpRecords.length; i++)
 										{
@@ -1462,10 +1644,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										if (pCountErr)
 										{
-											return fHandlerCallback(null, {
-												Outputs: { Pulled: 0, Written: 0, Errors: 0, ElapsedMs: Date.now() - tmpStartMs, ErrorLog: [ { Phase: 'Count', Error: pCountErr.message } ] },
-												Log: [`CloneStream: source count failed — ${pCountErr.message}. A chunked write cannot be verified without it, so nothing was written.`]
-											});
+											return fHandlerCallback(new Error(`CloneStream: source count failed — ${pCountErr.message}. A chunked write cannot be verified without it, so nothing was written.`));
 										}
 										let tmpCountOut = (pCountResult && pCountResult.Outputs) || {};
 										let tmpCountBody = tmpCountOut.Body;
@@ -1564,10 +1743,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								{
 									if (pListErr)
 									{
-										return fHandlerCallback(null, {
-											Outputs: { Pulled: 0, Written: 0, Errors: 0, ElapsedMs: Date.now() - tmpStartMs, ErrorLog: [{ Phase: 'ListConnections', Error: pListErr.message }] },
-											Log: [`JoinStream: ListConnections on [${tmpSourceBeacon}] failed — ${pListErr.message}`]
-										});
+										return fHandlerCallback(new Error(`JoinStream: ListConnections on [${tmpSourceBeacon}] failed — ${pListErr.message}`));
 									}
 									let tmpListOut = (pListResult && pListResult.Outputs) || pListResult || {};
 									let tmpConnections = Array.isArray(tmpListOut.Connections) ? tmpListOut.Connections : [];
@@ -1582,10 +1758,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									}
 									if (!tmpMatch || !tmpMatch.IDBeaconConnection)
 									{
-										return fHandlerCallback(null, {
-											Outputs: { Pulled: 0, Written: 0, Errors: 0, ElapsedMs: Date.now() - tmpStartMs, ErrorLog: [{ Phase: 'ListConnections', Error: 'no match' }] },
-											Log: [`JoinStream: source connection [${tmpSourceConn}] not found on beacon [${tmpSourceBeacon}].`]
-										});
+										return fHandlerCallback(new Error(`JoinStream: source connection [${tmpSourceConn}] not found on beacon [${tmpSourceBeacon}].`));
 									}
 									tmpConnID = tmpMatch.IDBeaconConnection;
 
@@ -2843,20 +3016,20 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
 							let tmpSettings = pWorkItem.Settings || {};
-							let tmpRecords = tmpSettings.Records || [];
-							let tmpConfig = tmpSettings.MappingConfiguration || {};
+							let tmpRecords = null;
+							let tmpConfig = null;
+							try
+							{
+								tmpRecords = _resolveRecordsSetting('MapRecords', 'Records', tmpSettings.Records);
+								tmpConfig = _resolveConfigSetting('MapRecords', 'MappingConfiguration', tmpSettings.MappingConfiguration);
+							}
+							catch (pSettingError)
+							{
+								return fHandlerCallback(pSettingError);
+							}
 
 							tmpFable.log.info(`MapRecords: Records type=${typeof(tmpRecords)}, isArray=${Array.isArray(tmpRecords)}, length=${typeof(tmpRecords)==='string'?tmpRecords.length:(Array.isArray(tmpRecords)?tmpRecords.length:'?')}`);
 							tmpFable.log.info(`MapRecords: Config type=${typeof(tmpConfig)}, keys=${typeof(tmpConfig)==='object'?Object.keys(tmpConfig||{}).join(','):'N/A'}`);
-
-							if (typeof (tmpRecords) === 'string')
-							{
-								try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpFable.log.error(`MapRecords: JSON parse error: ${e.message}`); tmpRecords = []; }
-							}
-							if (typeof (tmpConfig) === 'string')
-							{
-								try { tmpConfig = JSON.parse(tmpConfig); } catch (e) { tmpFable.log.error(`MapRecords: Config parse error: ${e.message}`); tmpConfig = {}; }
-							}
 
 							tmpFable.log.info(`MapRecords: after parse Records=${Array.isArray(tmpRecords)?tmpRecords.length:'not-array'}, Config.Mappings=${tmpConfig.Mappings?Object.keys(tmpConfig.Mappings).join(','):'none'}`);
 							if (Array.isArray(tmpRecords) && tmpRecords.length > 0)
@@ -2968,17 +3141,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
-							let tmpRecords = tmpSettings.Records || [];
-							let tmpCfg = tmpSettings.OperationConfiguration || {};
-							if (typeof (tmpCfg) === 'string') { try { tmpCfg = JSON.parse(tmpCfg); } catch (pCfgParseError) { tmpCfg = {}; } }
-
-							if (typeof (tmpRecords) === 'string')
+							let tmpRecords = null;
+							let tmpCfg = null;
+							try
 							{
-								try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpFable.log.error(`ExtractRecords: Records parse error: ${e.message}`); tmpRecords = []; }
+								tmpRecords = _resolveRecordsSetting('ExtractRecords', 'Records', tmpSettings.Records);
+								tmpCfg = _resolveConfigSetting('ExtractRecords', 'OperationConfiguration', tmpSettings.OperationConfiguration);
 							}
-							if (typeof (tmpCfg) === 'string')
+							catch (pSettingError)
 							{
-								try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpFable.log.error(`ExtractRecords: OperationConfiguration parse error: ${e.message}`); tmpCfg = {}; }
+								return fHandlerCallback(pSettingError);
 							}
 
 							if (Array.isArray(tmpRecords))
@@ -2992,14 +3164,6 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpGUIDTemplate = tmpCfg.GUIDTemplate || '';
 							let tmpProjection = tmpCfg.Projection || {};
 							let tmpFilter = tmpCfg.Filter || null;
-
-							if (!Array.isArray(tmpRecords))
-							{
-								return fHandlerCallback(null, {
-									Outputs: { Records: [], Result: '[]', RecordCount: 0, FilteredOutCount: 0, Errors: [] },
-									Log: [`ExtractRecords: input Records was not an array (got ${typeof(tmpRecords)}).`]
-								});
-							}
 
 							// Build a MappingConfiguration the existing template
 							// machinery already understands. The compiler in
@@ -3165,10 +3329,17 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
-							let tmpRecords = tmpSettings.Records || [];
-							let tmpCfg = tmpSettings.OperationConfiguration || {};
-							if (typeof (tmpRecords) === 'string') { try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpRecords = []; } }
-							if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { tmpCfg = {}; } }
+							let tmpRecords = null;
+							let tmpCfg = null;
+							try
+							{
+								tmpRecords = _resolveRecordsSetting('AggregateRecords', 'Records', tmpSettings.Records);
+								tmpCfg = _resolveConfigSetting('AggregateRecords', 'OperationConfiguration', tmpSettings.OperationConfiguration);
+							}
+							catch (pSettingError)
+							{
+								return fHandlerCallback(pSettingError);
+							}
 
 							let tmpEntity = tmpCfg.Entity || 'Aggregate';
 							let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
@@ -3177,13 +3348,6 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpAggs = Array.isArray(tmpCfg.Aggregates) ? tmpCfg.Aggregates : [];
 							let tmpIncludeGroupCols = (tmpCfg.IncludeGroupColumns === undefined) ? true : !!tmpCfg.IncludeGroupColumns;
 
-							if (!Array.isArray(tmpRecords))
-							{
-								return fHandlerCallback(null, {
-									Outputs: { Records: [], RecordCount: 0, GroupCount: 0, ElapsedMs: 0, Result: '[]' },
-									Log: [`AggregateRecords: input Records was not an array.`]
-								});
-							}
 							let tmpGuard = _checkRowCount('AggregateRecords', tmpRecords.length);
 							if (tmpGuard) return fHandlerCallback(tmpGuard);
 
@@ -3317,10 +3481,17 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
-							let tmpRecords = tmpSettings.Records || [];
-							let tmpCfg = tmpSettings.OperationConfiguration || {};
-							if (typeof (tmpRecords) === 'string') { try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpRecords = []; } }
-							if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { tmpCfg = {}; } }
+							let tmpRecords = null;
+							let tmpCfg = null;
+							try
+							{
+								tmpRecords = _resolveRecordsSetting('HistogramRecords', 'Records', tmpSettings.Records);
+								tmpCfg = _resolveConfigSetting('HistogramRecords', 'OperationConfiguration', tmpSettings.OperationConfiguration);
+							}
+							catch (pSettingError)
+							{
+								return fHandlerCallback(pSettingError);
+							}
 
 							let tmpEntity = tmpCfg.Entity || 'Histogram';
 							let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
@@ -3332,11 +3503,11 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpGroupBy = Array.isArray(tmpCfg.GroupBy) ? tmpCfg.GroupBy : [];
 							let tmpAggs = Array.isArray(tmpCfg.Aggregates) ? tmpCfg.Aggregates : [];
 
-							if (!Array.isArray(tmpRecords) || !tmpBucketCol)
+							if (!tmpBucketCol)
 							{
 								return fHandlerCallback(null, {
 									Outputs: { Records: [], RecordCount: 0, BucketCount: 0, ElapsedMs: 0, Result: '[]' },
-									Log: [`HistogramRecords: missing Records array or BucketColumn.`]
+									Log: [`HistogramRecords: missing BucketColumn.`]
 								});
 							}
 							let tmpGuard = _checkRowCount('HistogramRecords', tmpRecords.length);
@@ -3485,12 +3656,19 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
-							let tmpSource = tmpSettings.SourceRecords || [];
-							let tmpRelated = tmpSettings.RelatedRecords || [];
-							let tmpCfg = tmpSettings.OperationConfiguration || {};
-							if (typeof (tmpSource)  === 'string') { try { tmpSource  = JSON.parse(tmpSource);  } catch (e) { tmpSource  = []; } }
-							if (typeof (tmpRelated) === 'string') { try { tmpRelated = JSON.parse(tmpRelated); } catch (e) { tmpRelated = []; } }
-							if (typeof (tmpCfg)     === 'string') { try { tmpCfg     = JSON.parse(tmpCfg);     } catch (e) { tmpCfg     = {}; } }
+							let tmpSource = null;
+							let tmpRelated = null;
+							let tmpCfg = null;
+							try
+							{
+								tmpSource = _resolveRecordsSetting('IntersectRecords', 'SourceRecords', tmpSettings.SourceRecords);
+								tmpRelated = _resolveRecordsSetting('IntersectRecords', 'RelatedRecords', tmpSettings.RelatedRecords);
+								tmpCfg = _resolveConfigSetting('IntersectRecords', 'OperationConfiguration', tmpSettings.OperationConfiguration);
+							}
+							catch (pSettingError)
+							{
+								return fHandlerCallback(pSettingError);
+							}
 
 							let tmpEntity = tmpCfg.Entity || 'Intersection';
 							let tmpGUIDName = tmpCfg.GUIDName || ('GUID' + tmpEntity);
@@ -3525,13 +3703,6 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 								return fHandlerCallback(new Error('IntersectRecords: JoinMode=Unmatched emits rows that have no related side, but GUIDTemplate references {~D:Related.*~} — every row would receive the same GUID. Build the GUID from Source fields.'));
 							}
 
-							if (!Array.isArray(tmpSource) || !Array.isArray(tmpRelated))
-							{
-								return fHandlerCallback(null, {
-									Outputs: { Records: [], RecordCount: 0, MatchedSourceCount: 0, UnmatchedSourceCount: 0, ElapsedMs: 0, Result: '[]' },
-									Log: [`IntersectRecords: SourceRecords or RelatedRecords missing.`]
-								});
-							}
 							// Guard both sides — Intersection holds source AND
 							// related fully in memory (the related index is ~O(R)
 							// and the per-source loop pulls into match arrays).
@@ -3732,14 +3903,17 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 						Handler: function (pWorkItem, pContext, fHandlerCallback)
 						{
 							let tmpSettings = pWorkItem.Settings || {};
-							let tmpRecords = tmpSettings.Records || [];
+							let tmpRecords = null;
+							try
+							{
+								tmpRecords = _resolveRecordsSetting('BuildComprehension', 'Records', tmpSettings.Records);
+							}
+							catch (pSettingError)
+							{
+								return fHandlerCallback(pSettingError);
+							}
 							let tmpEntity = tmpSettings.Entity;
 							let tmpGUIDField = tmpSettings.GUIDField;
-
-							if (typeof (tmpRecords) === 'string')
-							{
-								try { tmpRecords = JSON.parse(tmpRecords); } catch (e) { tmpRecords = []; }
-							}
 
 							let tmpComprehension = {};
 							tmpComprehension[tmpEntity] = {};
@@ -3781,3 +3955,6 @@ module.exports._isChunkReplaySafe = _isChunkReplaySafe;
 module.exports._sanitizeForwardSession = _sanitizeForwardSession;
 module.exports._unnestRecordsHandler = _unnestRecordsHandler;
 module.exports._unnestGetByPath = _unnestGetByPath;
+module.exports._resolveRecordsSetting = _resolveRecordsSetting;
+module.exports._resolveConfigSetting = _resolveConfigSetting;
+module.exports._resolvePullBody = _resolvePullBody;

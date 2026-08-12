@@ -38,6 +38,10 @@ Read all records from a source entity, paginated internally. Reads run through `
 | `FilterExpression` | String | no | Meadow filter (for example `FBV~Field~EQ~Value`), spliced into the read URL. |
 | `SortField` | String | no | Column to order by for stable pagination. Defaults to the entity's auto-identity column. |
 
+A read that did not happen fails the work item; it never resolves to zero records. Missing settings, a dispatch error, any non-2xx status once the first-batch sort-filter fallback is spent, and a body that is not an array of records all reach the caller as an error. Server-side statuses (5xx) are still retried twice before failing. `Result: '[]'` is emitted only when the source genuinely returned no rows — the same rule the transform actions apply to their inputs, so `'[]'` means empty everywhere in a pipeline.
+
+Two response shapes are worth knowing about, because both used to read as "no rows": a `404`, which usually means the source connection was deleted or the entity's dynamic endpoint is not enabled on the source beacon; and an `HTTP 200` carrying `{ "Error": ... }`, which is how the platform API answers an authentication failure.
+
 ### WriteRecords
 
 Push a comprehension (or a bare records array) to a target entity using meadow-endpoints bulk `Upserts` (`PUT /<Entity>s/Upserts`), routed to the target beacon.

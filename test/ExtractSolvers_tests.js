@@ -169,9 +169,9 @@ suite('PullRecords source-error handling', function ()
 		this.timeout(8000);
 		const tmpHandlers = buildPullHarness(() => ({ Status: 500, Body: '{"Error":"Invalid column name ID Thing"}' }));
 		const tmpOutcome = await pull(tmpHandlers);
-		libAssert.strictEqual(tmpOutcome.Outputs.Errors, 1);
-		libAssert.match(tmpOutcome.Outputs.ErrorLog[0].Error, /HTTP 500/);
-		libAssert.strictEqual(tmpOutcome.Outputs.Pulled, 0);
+		libAssert.ok(tmpOutcome.Error, 'the pull must fail the work item, not report the failure inside a success');
+		libAssert.match(tmpOutcome.Error.message, /HTTP 500/);
+		libAssert.match(tmpOutcome.Error.message, /Invalid column name/);
 	});
 
 	test('a transient 500 is retried with backoff and the pull succeeds', async function ()
@@ -195,8 +195,8 @@ suite('PullRecords source-error handling', function ()
 		this.timeout(8000);
 		const tmpHandlers = buildPullHarness(() => ({ Status: 500, Body: '{"Error":"Invalid column name"}' }));
 		const tmpOutcome = await pull(tmpHandlers);
-		libAssert.strictEqual(tmpOutcome.Outputs.Errors, 1);
-		libAssert.strictEqual(tmpOutcome.Outputs.ErrorLog[0].Attempts, 3);
+		libAssert.ok(tmpOutcome.Error, 'an exhausted retry budget must fail the work item');
+		libAssert.match(tmpOutcome.Error.message, /3 attempt/);
 	});
 
 	test('a genuinely empty source still reads as zero rows successfully', async function ()
