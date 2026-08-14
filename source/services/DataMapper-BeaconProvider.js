@@ -953,7 +953,10 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'BatchSize',            DataType: 'Number', Required: false, Description: 'Records per pull/upsert batch (default 500). The pull-write pair fires once per batch.' },
 							{ Name: 'SortField',            DataType: 'String', Required: false, Description: 'Source sort column for stable pagination. Defaults to "ID<SourceEntity>". Pass empty string to disable (e.g. for synth-databeacon, which doesn\'t implement /FilteredTo).' },
 							{ Name: 'FilterExpression',     DataType: 'String', Required: false, Description: 'Meadow filter to apply on the source pull (e.g. FBV~Status~EQ~Active).' },
-							{ Name: 'WriteConcurrency',     DataType: 'Number', Required: false, Description: 'In-flight bulk Upsert chunks (clamped 1..5). Default 1 — one batch in-flight at a time keeps the streaming guarantee. Bumping to N means up to N batches resident in memory simultaneously.' }
+							{ Name: 'WriteConcurrency',     DataType: 'Number', Required: false, Description: 'In-flight bulk Upsert chunks (clamped 1..5). Default 1 — one batch in-flight at a time keeps the streaming guarantee. Bumping to N means up to N batches resident in memory simultaneously.' },
+							// String so the engine resolves the Operation.Session
+							// template into the run's forwarded session id.
+							{ Name: 'Session',              DataType: 'String', Required: false, Description: 'Forwarded caller session id for per-run row-auth on the SOURCE reads (resolved from the trigger\'s Parameters.Session). Empty → the source beacon\'s bound session. Writes go out under the target beacon\'s own identity, same as WriteRecords.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback, fReportProgress)
 						{
@@ -967,6 +970,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpTargetEntity = tmpSettings.TargetEntity;
 							let tmpGUIDName     = tmpSettings.GUIDName;
 							let tmpBatchSize    = tmpSettings.BatchSize || 500;
+							let tmpForwardSession = _sanitizeForwardSession(tmpSettings.Session);
 
 							let tmpOpCfg = tmpSettings.OperationConfiguration || {};
 							if (typeof tmpOpCfg === 'string')
@@ -1203,7 +1207,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										Capability:  'MeadowProxy',
 										Action:      'Request',
-										Settings:    { Method: 'PUT', Path: `/1.0/${tmpTargetConn}/${tmpTargetEntity}/Upserts`, Body: JSON.stringify(tmpRows), RemoteUser: '' },
+										Settings:    { Method: 'PUT', Path: `/1.0/${tmpTargetConn}/${tmpTargetEntity}/Upserts`, Body: JSON.stringify(tmpRows), RemoteUser: '', Session: tmpForwardSession },
 										AffinityKey: tmpTargetBeacon,
 										RequireAffinityMatch: true,
 										TimeoutMs:   120000
@@ -1237,7 +1241,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										Capability:  'MeadowProxy',
 										Action:      'Request',
-										Settings:    { Method: 'GET', Path: tmpReadPath, Body: '', RemoteUser: '' },
+										Settings:    { Method: 'GET', Path: tmpReadPath, Body: '', RemoteUser: '', Session: tmpForwardSession },
 										AffinityKey: tmpSourceBeacon,
 										RequireAffinityMatch: true,
 										TimeoutMs:   60000
@@ -1316,7 +1320,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											{
 												Capability:  'MeadowProxy',
 												Action:      'Request',
-												Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpWriteRows), RemoteUser: '' },
+												Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpWriteRows), RemoteUser: '', Session: tmpForwardSession },
 												AffinityKey: tmpTargetBeacon,
 												RequireAffinityMatch: true,
 												TimeoutMs:   120000
@@ -1441,7 +1445,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 									{
 										Capability:  'MeadowProxy',
 										Action:      'Request',
-										Settings:    { Method: 'GET', Path: tmpCountPath, Body: '', RemoteUser: '' },
+										Settings:    { Method: 'GET', Path: tmpCountPath, Body: '', RemoteUser: '', Session: tmpForwardSession },
 										AffinityKey: tmpSourceBeacon,
 										RequireAffinityMatch: true,
 										TimeoutMs:   60000
@@ -1486,12 +1490,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'TargetEntity',         DataType: 'String', Required: true },
 							{ Name: 'GUIDName',             DataType: 'String', Required: true, Description: 'Destination GUID column. Set per-row from OperationConfiguration.GUIDTemplate before upsert.' },
 							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ JoinOn:{SourceField,RelatedField}, Projection (Record.X / Related.X only), GUIDTemplate, OrderBy (must be UNIQUE source column), BatchSize? }. Bundled to dodge UV settings-resolver template stripping.' },
-							{ Name: 'BatchSize',            DataType: 'Number', Required: false, Description: 'Rows per page on both the source-side keyset LIMIT and the target-side Upserts chunk. Default 500.' }
+							{ Name: 'BatchSize',            DataType: 'Number', Required: false, Description: 'Rows per page on both the source-side keyset LIMIT and the target-side Upserts chunk. Default 500.' },
+							// String so the engine resolves the Operation.Session
+							// template into the run's forwarded session id.
+							{ Name: 'Session',              DataType: 'String', Required: false, Description: 'Forwarded caller session id (resolved from the trigger\'s Parameters.Session). Presented upstream so a remote-fronting target enforces row-level auth as the real caller. Empty → the request carries no session and the target decides.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback, fReportProgress)
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
+							let tmpForwardSession = _sanitizeForwardSession(tmpSettings.Session);
 							let tmpSourceBeacon = tmpSettings.SourceBeaconName;
 							let tmpSourceConn   = tmpSettings.SourceConnection;
 							let tmpSourceTable  = tmpSettings.SourceTable;
@@ -1671,7 +1679,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 													{
 														Capability:  'MeadowProxy',
 														Action:      'Request',
-														Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpRows), RemoteUser: '' },
+														Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpRows), RemoteUser: '', Session: tmpForwardSession },
 														AffinityKey: tmpTargetBeacon,
 														RequireAffinityMatch: true,
 														TimeoutMs:   120000
@@ -1772,12 +1780,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'TargetEntity',         DataType: 'String', Required: true, Description: 'Target table for the aggregated rows.' },
 							{ Name: 'GUIDName',             DataType: 'String', Required: true, Description: 'Destination GUID column. Each result row\'s value for this column is set from OperationConfiguration.GUIDTemplate before upsert; meadow uses it as the upsert key (so re-runs replace, not duplicate).' },
 							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ GroupBy: [field], Aggregates: [{Source, Function, As}], GUIDTemplate, OrderBy? }. Bundled here so UV\'s settings resolver does not template-strip the {~D:Record.X~} placeholders before the handler runs.' },
-							{ Name: 'BatchSize',            DataType: 'Number', Required: false, Description: 'Records per chunked-write Upserts call (default 500). The result set is sliced into chunks of this size and PUT one at a time through MeadowProxy.' }
+							{ Name: 'BatchSize',            DataType: 'Number', Required: false, Description: 'Records per chunked-write Upserts call (default 500). The result set is sliced into chunks of this size and PUT one at a time through MeadowProxy.' },
+							// String so the engine resolves the Operation.Session
+							// template into the run's forwarded session id.
+							{ Name: 'Session',              DataType: 'String', Required: false, Description: 'Forwarded caller session id (resolved from the trigger\'s Parameters.Session). Presented upstream so a remote-fronting target enforces row-level auth as the real caller. Empty → the request carries no session and the target decides.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback, fReportProgress)
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
+							let tmpForwardSession = _sanitizeForwardSession(tmpSettings.Session);
 							let tmpSourceBeacon = tmpSettings.SourceBeaconName;
 							let tmpSourceConn   = tmpSettings.SourceConnection;
 							let tmpSourceTable  = tmpSettings.SourceTable;
@@ -1947,7 +1959,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 													{
 														Capability:  'MeadowProxy',
 														Action:      'Request',
-														Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpChunk), RemoteUser: '' },
+														Settings:    { Method: 'PUT', Path: tmpWritePath, Body: JSON.stringify(tmpChunk), RemoteUser: '', Session: tmpForwardSession },
 														AffinityKey: tmpTargetBeacon,
 														RequireAffinityMatch: true,
 														TimeoutMs:   120000
@@ -2022,12 +2034,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'Entity',           DataType: 'String', Required: true,  Description: 'Target raw-archive entity name (e.g. RAW_Sale).' },
 							{ Name: 'Comprehension',    DataType: 'Object', Required: true,  Description: 'Comprehension { <Entity>: { <key>: <record>, ... } } — flows from the BuildComprehension node. Each record is wrapped into a raw-archive row.' },
 							{ Name: 'IdentityField',    DataType: 'String', Required: false, Description: 'Field on each source record to preserve as the Identity column. If absent or missing on the record, falls back to the comprehension key — so source rows need no unique id.' },
-							{ Name: 'SourceTable',      DataType: 'String', Required: false, Description: 'Original source table name; stored verbatim in the SourceTable column for round-trip identification.' }
+							{ Name: 'SourceTable',      DataType: 'String', Required: false, Description: 'Original source table name; stored verbatim in the SourceTable column for round-trip identification.' },
+							// String so the engine resolves the Operation.Session
+							// template into the run's forwarded session id.
+							{ Name: 'Session',              DataType: 'String', Required: false, Description: 'Forwarded caller session id (resolved from the trigger\'s Parameters.Session). Presented upstream so a remote-fronting target enforces row-level auth as the real caller. Empty → the request carries no session and the target decides.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback, fReportProgress)
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings = pWorkItem.Settings || {};
+							let tmpForwardSession = _sanitizeForwardSession(tmpSettings.Session);
 							let tmpBeaconName = tmpSettings.TargetBeaconName;
 							let tmpConnHash   = tmpSettings.ConnectionHash;
 							let tmpEntity     = tmpSettings.Entity;
@@ -2121,7 +2137,8 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											Method:     'POST',
 											Path:       `/1.0/${tmpConnHash}/${tmpEntity}`,
 											Body:       JSON.stringify(tmpRawRecord),
-											RemoteUser: ''
+											RemoteUser: '',
+											Session:    tmpForwardSession
 										},
 										AffinityKey: tmpBeaconName,
 										RequireAffinityMatch: true,
@@ -2170,12 +2187,16 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'BulkChunkSize',    DataType: 'Number', Required: false, Description: 'Records per bulk Upserts call. Default 500. Each chunk is one PUT roundtrip through MeadowProxy.' },
 							{ Name: 'Concurrency',      DataType: 'Number', Required: false, Description: 'How many bulk Upserts chunks to keep in flight concurrently. Default 1 (preserves the original sequential behavior — backwards-compatible). Clamped to [1, 5]: meadow-endpoints\' /Upserts handler processes its rows strictly serially per request, so client-side parallelism is the only knob for raw throughput, but each worker takes a postgres connection from the target beacon\'s pool — keeping the cap modest avoids starving other tenants of the lake. Compilers (typed-op Write nodes) opt in explicitly; ad-hoc /Upserts callers stay at 1.' },
 							{ Name: 'ResetMode',        DataType: 'String', Required: false, Description: '\'Append\' (default) | \'Replace\'. Replace soft-deletes existing rows whose GUIDName value is NOT among the rows written, after the upsert succeeds — keeps cached views from accumulating orphans when source data churns. The purge does NOT touch meadow\'s internal Upsert handler (which is intentionally serial); orphans are deleted via meadow\'s standard DELETE-by-id surface, parallelized client-side via Concurrency. The purge is FAIL-SAFE: if any record carries no value at GUIDName, or the existing-rows fetch fails, the purge is skipped entirely (Outputs.PurgeSkipped names the entity, ErrorLog carries the reason) rather than deleting against a live set known to be incomplete.' },
-							{ Name: 'GUIDName',         DataType: 'String', Required: false, Description: 'Column name for the GUID/identity used by ResetMode=Replace orphan detection. Defaults to "GUID" + Entity. Read from BOTH the records being written and the rows already in the target — the two must be the same column or the purge would be comparing unrelated values. Ignored when ResetMode=Append. NOTE: this does NOT change meadow\'s upsert key, which is always GUID<Entity>; records that carry no GUID<Entity> INSERT on every run, so a Replace keyed on some other column will accumulate duplicates rather than replace them.' }
+							{ Name: 'GUIDName',         DataType: 'String', Required: false, Description: 'Column name for the GUID/identity used by ResetMode=Replace orphan detection. Defaults to "GUID" + Entity. Read from BOTH the records being written and the rows already in the target — the two must be the same column or the purge would be comparing unrelated values. Ignored when ResetMode=Append. NOTE: this does NOT change meadow\'s upsert key, which is always GUID<Entity>; records that carry no GUID<Entity> INSERT on every run, so a Replace keyed on some other column will accumulate duplicates rather than replace them.' },
+							// String so the engine resolves the Operation.Session
+							// template into the run's forwarded session id.
+							{ Name: 'Session',              DataType: 'String', Required: false, Description: 'Forwarded caller session id (resolved from the trigger\'s Parameters.Session). Presented upstream so a remote-fronting target enforces row-level auth as the real caller. Empty → the request carries no session and the target decides.' }
 						],
 						Handler: function (pWorkItem, pContext, fHandlerCallback, fReportProgress)
 						{
 							let tmpStartMs = Date.now();
 							let tmpSettings  = pWorkItem.Settings || {};
+							let tmpForwardSession = _sanitizeForwardSession(tmpSettings.Session);
 							let tmpBeaconName = tmpSettings.TargetBeaconName;
 							let tmpConnHash   = tmpSettings.ConnectionHash;
 							let tmpEntityHint = tmpSettings.Entity;
@@ -2425,7 +2446,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											{
 												Capability: 'MeadowProxy',
 												Action:     'Request',
-												Settings: { Method: 'GET', Path: tmpListPath(tmpPage, 500), Body: '', RemoteUser: '' },
+												Settings: { Method: 'GET', Path: tmpListPath(tmpPage, 500), Body: '', RemoteUser: '', Session: tmpForwardSession },
 												AffinityKey: tmpBeaconName,
 												RequireAffinityMatch: true,
 												TimeoutMs: 30000
@@ -2501,7 +2522,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 												{
 													Capability: 'MeadowProxy',
 													Action:     'Request',
-													Settings: { Method: 'DELETE', Path: tmpDelPath, Body: '', RemoteUser: '' },
+													Settings: { Method: 'DELETE', Path: tmpDelPath, Body: '', RemoteUser: '', Session: tmpForwardSession },
 													AffinityKey: tmpBeaconName,
 													RequireAffinityMatch: true,
 													TimeoutMs: 30000
@@ -2565,7 +2586,8 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 													Method:     'PUT',
 													Path:       tmpPath,
 													Body:       tmpBodyStr,
-													RemoteUser: ''
+													RemoteUser: '',
+													Session:    tmpForwardSession
 												},
 												AffinityKey: tmpBeaconName,
 												RequireAffinityMatch: true,
