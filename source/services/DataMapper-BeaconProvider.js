@@ -42,6 +42,10 @@ const libCrypto                   = require('crypto');
 // chunk loop all start to misbehave.
 const MAX_INMEMORY_ROWS = parseInt(process.env.DATA_MAPPER_MAX_INMEMORY_ROWS, 10) || 250000;
 
+// Socket timeout for a bulk-write chunk dispatch. Tunable so a deployment can
+// bound a slow upstream, and so the retry path can be exercised deliberately.
+const WRITE_DISPATCH_TIMEOUT_MS = Math.max(1, parseInt(process.env.DATA_MAPPER_WRITE_TIMEOUT_MS, 10) || 60000);
+
 function _checkRowCount(pAction, pCount)
 {
 	if (pCount > MAX_INMEMORY_ROWS)
@@ -2591,7 +2595,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 												},
 												AffinityKey: tmpBeaconName,
 												RequireAffinityMatch: true,
-												TimeoutMs:   60000
+												TimeoutMs:   WRITE_DISPATCH_TIMEOUT_MS
 											},
 											(pErr, pResult) =>
 											{
@@ -2605,7 +2609,11 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 												let tmpFailureStatus = 0;
 												if (pErr)
 												{
-													tmpFailureMessage = pErr.message || String(pErr);
+													// The code has to ride along: classification matches
+													// RETRYABLE_TRANSPORT_CODES against this string, and a
+													// socket timeout carries its code ONLY on `.code` --
+													// its message is a bare 'Request timed out'.
+													tmpFailureMessage = [ pErr.code, pErr.message || String(pErr) ].filter((pPart) => { return !!pPart; }).join(': ');
 												}
 												else
 												{
