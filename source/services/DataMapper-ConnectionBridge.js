@@ -14,6 +14,7 @@
 const libFableServiceProviderBase = require('fable-serviceproviderbase');
 const libPath = require('path');
 const libFs = require('fs');
+const libMeadowFilterTranslator = require('./DataMapper-MeadowFilter-Translator.js');
 
 const defaultConnectionBridgeOptions = (
 	{
@@ -2758,6 +2759,10 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 	 * Memory ceiling = group cardinality, not source row count. Pair with
 	 * source databases that have indexes on the GroupBy columns; otherwise
 	 * the source-side scan dominates.
+	 *
+	 * FilterExpression restricts the source rows the same way it does on the
+	 * pull-based layouts, except it becomes a WHERE inside the source query
+	 * rather than a /FilteredTo/ URL segment.
 	 */
 	_compileSQLAggregateToOperation(pOperation)
 	{
@@ -2786,6 +2791,10 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			GUIDTemplate: tmpGUIDTemplate
 		};
 		if (tmpOrderBy.length > 0) { tmpBundledCfg.OrderBy = tmpOrderBy; }
+		// The structured filter rides inside the bundle (arrays don't survive
+		// as top-level settings); the meadow-string form goes on the node as a
+		// String setting, the same way every pull-based compiler passes it.
+		if (Array.isArray(tmpCfg.Filter) && tmpCfg.Filter.length > 0) { tmpBundledCfg.Filter = tmpCfg.Filter; }
 
 		return {
 			Name: tmpName,
@@ -2814,6 +2823,7 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						TargetEntity:         tmpEntity,
 						GUIDName:             tmpGUIDName,
 						BatchSize:            tmpCfg.BatchSize || 500,
+						FilterExpression:     tmpCfg.FilterExpression || '',
 						OperationConfiguration: JSON.stringify(tmpBundledCfg),
 						AffinityKey:          this._selfBeaconName(),
 						RequireAffinityMatch: true
@@ -3415,6 +3425,32 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 				{
 					return new Error('SQLAggregate requires OperationConfiguration.GUIDTemplate (e.g. "ORDERBYMONTH_{~D:Record.OrderMonth~}").');
 				}
+				// A filter that can't be pushed down has to fail here, at save
+				// time, rather than at run time — a run that quietly aggregates
+				// the whole table reports success.
+				if (tmpCfg.FilterExpression && Array.isArray(tmpCfg.Filter) && tmpCfg.Filter.length > 0)
+				{
+					return new Error('SQLAggregate accepts OperationConfiguration.FilterExpression (meadow string) or OperationConfiguration.Filter (structured), not both.');
+				}
+				if (tmpCfg.FilterExpression)
+				{
+					if (typeof tmpCfg.FilterExpression !== 'string')
+					{
+						return new Error('SQLAggregate OperationConfiguration.FilterExpression must be a meadow filter string (e.g. "FBV~Action~NE~DELETE").');
+					}
+					try
+					{
+						libMeadowFilterTranslator.translateFilterExpression(tmpCfg.FilterExpression);
+					}
+					catch (pFilterError)
+					{
+						return new Error('SQLAggregate ' + pFilterError.message);
+					}
+				}
+				if (tmpCfg.Filter !== undefined && !Array.isArray(tmpCfg.Filter))
+				{
+					return new Error('SQLAggregate OperationConfiguration.Filter must be an array of { Column, Operator, Value } terms.');
+				}
 				break;
 
 			case 'histogram':
@@ -3932,6 +3968,11 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			if ('BucketCount'         in tmpVal) tmpRow.BucketCount         = tmpVal.BucketCount;
 			if ('MatchedSourceCount'  in tmpVal) tmpRow.MatchedSourceCount  = tmpVal.MatchedSourceCount;
 			if ('UnmatchedSourceCount' in tmpVal) tmpRow.UnmatchedSourceCount = tmpVal.UnmatchedSourceCount;
+			// The streaming layouts do their counting at the source, so a
+			// summary without Pulled / SourceSQL cannot distinguish a filtered
+			// aggregate from one that read the whole table.
+			if ('Pulled'              in tmpVal) tmpRow.Pulled              = tmpVal.Pulled;
+			if ('SourceSQL'           in tmpVal) tmpRow.SourceSQL           = tmpVal.SourceSQL;
 			if ('Written'             in tmpVal) tmpRow.Written             = tmpVal.Written;
 			if ('OrphansDeleted'      in tmpVal) tmpRow.OrphansDeleted      = tmpVal.OrphansDeleted;
 			if ('OrphanErrors'        in tmpVal) tmpRow.OrphanErrors        = tmpVal.OrphanErrors;

@@ -33,6 +33,10 @@ const libMeadowGUIDMap            = require('meadow-integration/source/Meadow-Se
 // Node crypto for the raw-archive RecordMD5 (WriteRecordsRaw clone-to-lake).
 const libCrypto                   = require('crypto');
 
+// meadow filter string → structured SQL filter, for the push-down layouts
+// that have no /FilteredTo/ URL to splice the string into.
+const { translateFilterExpression } = require('./DataMapper-MeadowFilter-Translator.js');
+
 // In-memory row-count guard. The four typed transforms hold their
 // input set fully in memory (the architecture supports swapping in a
 // SQL-pushdown compute later, but for now: bounded). Configurable via
@@ -1773,7 +1777,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 
 					'AggregateStream':
 					{
-						Description: 'Streaming-layout Aggregation: pushes the GROUP BY into the source DB (DataBeaconAccess.Aggregate), receives the small result set (cardinality of group keys), then chunked-writes the rows to the target table. Memory ceiling = the result set, never the source. Pair with OperationType=SQLAggregate.',
+						Description: 'Streaming-layout Aggregation: pushes the GROUP BY — and the optional FilterExpression, as a parameterized WHERE ahead of it — into the source DB (DataBeaconAccess.Aggregate), receives the small result set (cardinality of group keys), then chunked-writes the rows to the target table. Memory ceiling = the result set, never the source. Pair with OperationType=SQLAggregate.',
 						SettingsSchema:
 						[
 							{ Name: 'SourceBeaconName',     DataType: 'String', Required: true, Description: 'Beacon name of the source (UV mesh AffinityKey for the aggregate dispatch).' },
@@ -1783,7 +1787,8 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							{ Name: 'TargetConnectionHash', DataType: 'String', Required: true, Description: 'URL slug of the target connection (used in the /1.0/<hash>/<Table>/Upserts URL).' },
 							{ Name: 'TargetEntity',         DataType: 'String', Required: true, Description: 'Target table for the aggregated rows.' },
 							{ Name: 'GUIDName',             DataType: 'String', Required: true, Description: 'Destination GUID column. Each result row\'s value for this column is set from OperationConfiguration.GUIDTemplate before upsert; meadow uses it as the upsert key (so re-runs replace, not duplicate).' },
-							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ GroupBy: [field], Aggregates: [{Source, Function, As}], GUIDTemplate, OrderBy? }. Bundled here so UV\'s settings resolver does not template-strip the {~D:Record.X~} placeholders before the handler runs.' },
+							{ Name: 'OperationConfiguration', DataType: 'Object', Required: true, Description: '{ GroupBy: [field], Aggregates: [{Source, Function, As}], GUIDTemplate, OrderBy?, Filter? }. Bundled here so UV\'s settings resolver does not template-strip the {~D:Record.X~} placeholders before the handler runs. Filter is the structured form of FilterExpression — an array of { Column, Operator, Value, Connector } terms using SQL operator tokens — for callers that would rather not write the meadow grammar. Supplying both is an error.' },
+							{ Name: 'FilterExpression',     DataType: 'String', Required: false, Description: 'Meadow filter restricting which SOURCE ROWS enter the GROUP BY (e.g. FBV~Action~NE~DELETE), same grammar as CloneStream/PullRecords. Translated to a parameterized WHERE that runs in the source database ahead of the grouping, so the result set only gets smaller. FBV/FBVOR/FBL/FBLOR/FOP/FOPOR/FCP only — JSON (FBJ*), date (FBD), and sort (FSF) stanzas cannot be pushed down and are rejected rather than ignored. Filtering an aggregate output alias would be HAVING, which is not supported.' },
 							{ Name: 'BatchSize',            DataType: 'Number', Required: false, Description: 'Records per chunked-write Upserts call (default 500). The result set is sliced into chunks of this size and PUT one at a time through MeadowProxy.' },
 							// String so the engine resolves the Operation.Session
 							// template into the run's forwarded session id.
@@ -1812,6 +1817,31 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 							let tmpAggregates = Array.isArray(tmpOpCfg.Aggregates) ? tmpOpCfg.Aggregates : [];
 							let tmpOrderBy    = Array.isArray(tmpOpCfg.OrderBy) ? tmpOpCfg.OrderBy : [];
 							let tmpGUIDTemplate = tmpOpCfg.GUIDTemplate || '';
+
+							// Source-row filter. Either grammar is accepted, never
+							// both: the meadow string (matching every other layout's
+							// FilterExpression) or the emitter's structured form.
+							// A malformed filter fails the work item rather than
+							// falling through to an unfiltered aggregate — the whole
+							// point of the setting is that rows are missing on
+							// purpose.
+							let tmpFilterExpression = tmpSettings.FilterExpression || '';
+							let tmpStructuredFilter = Array.isArray(tmpOpCfg.Filter) ? tmpOpCfg.Filter : null;
+							if (tmpFilterExpression && tmpStructuredFilter)
+							{
+								return fHandlerCallback(new Error('AggregateStream: supply either Settings.FilterExpression or OperationConfiguration.Filter, not both.'));
+							}
+							if (tmpFilterExpression)
+							{
+								try
+								{
+									tmpStructuredFilter = translateFilterExpression(tmpFilterExpression);
+								}
+								catch (pFilterError)
+								{
+									return fHandlerCallback(new Error('AggregateStream: ' + pFilterError.message));
+								}
+							}
 
 							if (!tmpSelf._Client || !tmpSourceBeacon || !tmpSourceConn || !tmpSourceTable
 								|| !tmpTargetBeacon || !tmpTargetConn || !tmpTargetEntity || !tmpGUIDName
@@ -1884,6 +1914,7 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											GroupBy: tmpGroupBy,
 											Aggregates: tmpAggregates
 										};
+									if (tmpStructuredFilter) { tmpAggSpec.Filter = tmpStructuredFilter; }
 									if (tmpOrderBy.length > 0) { tmpAggSpec.OrderBy = tmpOrderBy; }
 
 									if (typeof fReportProgress === 'function')
@@ -1913,12 +1944,28 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 											let tmpRows = Array.isArray(tmpAggOut.Rows) ? tmpAggOut.Rows : [];
 											let tmpAggElapsed = tmpAggOut.ElapsedMs || 0;
 											let tmpRowCount = tmpRows.length;
+											// The statement the source actually ran. Without it
+											// on the manifest there is no way to tell a filtered
+											// aggregate from an unfiltered one after the fact.
+											let tmpSourceSQL = tmpAggOut.SQL || '';
+
+											// Emitters older than the filter support ignore spec
+											// keys they don't recognize, so a new mapper against
+											// an old beacon would aggregate the whole table and
+											// report success. Refuse the result instead.
+											if (tmpStructuredFilter && tmpSourceSQL && tmpSourceSQL.indexOf(' WHERE ') < 0)
+											{
+												return fHandlerCallback(new Error('AggregateStream: a filter was requested but the source query came back without a WHERE clause — the [' + tmpSourceBeacon + '] beacon\'s aggregate emitter is too old to apply it. Upgrade retold-databeacon on that beacon. SQL: ' + tmpSourceSQL));
+											}
 
 											if (tmpRowCount === 0)
 											{
+												// A run that produced nothing is where "was it my
+												// filter or was it the source?" gets asked, so the
+												// statement travels with this result too.
 												return fHandlerCallback(null, {
-													Outputs: { Pulled: 0, Written: 0, Errors: 0, ElapsedMs: Date.now() - tmpStartMs, AggregateMs: tmpAggElapsed, ErrorLog: [] },
-													Log: [`AggregateStream: source returned 0 rows; nothing to write.`]
+													Outputs: { Pulled: 0, Written: 0, Errors: 0, ElapsedMs: Date.now() - tmpStartMs, AggregateMs: tmpAggElapsed, SourceSQL: tmpSourceSQL, FilterTerms: tmpStructuredFilter ? tmpStructuredFilter.length : 0, ErrorLog: [] },
+													Log: [`AggregateStream: ${tmpSourceTable}${tmpStructuredFilter ? ' (filtered, ' + tmpStructuredFilter.length + ' term(s))' : ' (UNFILTERED — whole table)'} — source returned 0 rows; nothing to write.`]
 												});
 											}
 
@@ -1953,9 +2000,11 @@ class DataMapperBeaconProvider extends libFableServiceProviderBase
 															Errors: tmpTotalErrors,
 															ElapsedMs: Date.now() - tmpStartMs,
 															AggregateMs: tmpAggElapsed,
+															SourceSQL: tmpSourceSQL,
+															FilterTerms: tmpStructuredFilter ? tmpStructuredFilter.length : 0,
 															ErrorLog: tmpErrorLog.slice(0, 50)
 														},
-														Log: [`AggregateStream: ${tmpSourceTable} → ${tmpTargetEntity} on [${tmpTargetBeacon}] — ${tmpRowCount} groups (aggregate ${tmpAggElapsed}ms), wrote ${tmpTotalWritten}, ${tmpTotalErrors} errors in ${Date.now() - tmpStartMs}ms.`]
+														Log: [`AggregateStream: ${tmpSourceTable}${tmpStructuredFilter ? ' (filtered, ' + tmpStructuredFilter.length + ' term(s))' : ' (UNFILTERED — whole table)'} → ${tmpTargetEntity} on [${tmpTargetBeacon}] — ${tmpRowCount} groups (aggregate ${tmpAggElapsed}ms), wrote ${tmpTotalWritten}, ${tmpTotalErrors} errors in ${Date.now() - tmpStartMs}ms.`]
 													});
 												}
 												let tmpChunk = tmpRows.slice(tmpChunkOffset, tmpChunkOffset + tmpBatchSize);
