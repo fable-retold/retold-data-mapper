@@ -1899,7 +1899,14 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						// of the same graph. Persistent now (meadow-endpoints
 						// 4.0.19 PUT-by-id makes per-row state durable
 						// across edits and restarts).
-						let tmpCfgHash = _self._hashOperationConfig(pOperation);
+						// Fingerprint the COMPILED GRAPH, not the OperationConfig. The
+						// compile happens above either way, so this costs one sha1 of an
+						// object we already hold — and it is the correct key: a change to
+						// a compiler emits a different graph and misses the cache by
+						// construction, where a config fingerprint would hit and trigger
+						// a stale graph. _injectRunSessionTemplate writes only a static
+						// template string, so the digest stays stable run to run.
+						let tmpCfgHash = _self._hashCompiledGraph(tmpGraph);
 						let tmpCacheHit = !!(pOperation.CompiledOperationConfigHash === tmpCfgHash
 							&& pOperation.CompiledOperationHash);
 
@@ -3656,7 +3663,18 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 						(pPutError) =>
 						{
 							if (pPutError) return fFail(502, pPutError.message || String(pPutError));
-							return fFinish(tmpUpdate, pValidationWarning);
+							// The PUT body deliberately omits the cache columns, so a caller
+							// can never plant a compiled hash — but eager-registration needs
+							// them to decide whether it can skip the UV re-register. meadow's
+							// update only writes the columns it is given, so the stored values
+							// survive the PUT; carry them forward here. Without this the cache
+							// check sees undefined on EVERY re-registration and the graph is
+							// re-POSTed to UV for every stage of every run.
+							return fFinish(Object.assign({}, tmpUpdate,
+								{
+									CompiledOperationHash:       tmpExisting.CompiledOperationHash || '',
+									CompiledOperationConfigHash: tmpExisting.CompiledOperationConfigHash || ''
+								}), pValidationWarning);
 						});
 				});
 		};
@@ -3737,7 +3755,10 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 		// this, runner-triggered graphs forward no session and reads fall back to
 		// the beacon's bound identity.
 		this._injectRunSessionTemplate(tmpGraph);
-		let tmpCfgHash = this._hashOperationConfig(pOperation);
+		// See the run path above: the key is the compiled graph, so a compiler
+		// change invalidates the cache on its own rather than silently reusing a
+		// graph that no longer matches the code that produced it.
+		let tmpCfgHash = this._hashCompiledGraph(tmpGraph);
 		if (pOperation.CompiledOperationConfigHash === tmpCfgHash && pOperation.CompiledOperationHash)
 		{
 			return fCallback(null, { Compiled: false, OperationHash: pOperation.CompiledOperationHash, CacheHit: true });
@@ -3749,6 +3770,15 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 			let tmpHash = (pCreated && pCreated.Hash) || (tmpGraph && tmpGraph.Hash);
 			if (!tmpHash) return fCallback(null, { Compiled: false, Reason: 'UV /Operation returned no Hash' });
 
+			// No row id, no cache write. A PUT to /OperationConfig/undefined is not a
+			// no-op to reason about — it is an unaddressed write, and this cache is
+			// exactly the state that, when it lands on the wrong row, points one
+			// ConfigHash at another operation's graph. Skipping costs a recompile.
+			if (!pOperation.IDOperationConfig)
+			{
+				tmpSelf.fable.log.warn('eager-register: no IDOperationConfig on ' + (pOperation.Hash || '(unnamed)') + ' — compiled graph ' + tmpHash + ' registered but NOT cached.');
+				return fCallback(null, { Compiled: true, OperationHash: tmpHash, CacheHit: false, CachePersisted: false });
+			}
 			let tmpUpdate =
 			{
 				IDOperationConfig:           pOperation.IDOperationConfig,
@@ -3768,27 +3798,20 @@ class DataMapperConnectionBridge extends libFableServiceProviderBase
 		});
 	}
 
-	_hashOperationConfig(pOperation)
+	/**
+	 * SHA-1 of a compiled UV Operation graph — the compile cache's key.
+	 *
+	 * Keyed on the graph rather than on the OperationConfig that produced it, so
+	 * that a change to any compiler invalidates every cached graph automatically.
+	 * UV assigns the Operation hash on POST and the graph carries no hash of its
+	 * own, so this digest is the only pre-POST identity a graph has.
+	 *
+	 * @param {object} pGraph - a compiled graph, after run-session injection
+	 * @return {string}
+	 */
+	_hashCompiledGraph(pGraph)
 	{
-		let tmpCfg = pOperation.OperationConfiguration || {};
-		if (typeof tmpCfg === 'string')
-		{
-			try { tmpCfg = JSON.parse(tmpCfg); } catch (e) { tmpCfg = {}; }
-		}
-		let tmpCanonical = JSON.stringify({
-			Hash:                 pOperation.Hash || '',
-			OperationType:        pOperation.OperationType || '',
-			SourceBeaconName:     pOperation.SourceBeaconName || '',
-			SourceConnectionHash: pOperation.SourceConnectionHash || '',
-			SourceEntity:         pOperation.SourceEntity || '',
-			TargetBeaconName:     pOperation.TargetBeaconName || '',
-			TargetConnectionHash: pOperation.TargetConnectionHash || '',
-			TargetTable:          pOperation.TargetTable || '',
-			ResetMode:            pOperation.ResetMode || 'Append',
-			Concurrency:          pOperation.Concurrency || 0,
-			OperationConfiguration: tmpCfg
-		});
-		return require('crypto').createHash('sha1').update(tmpCanonical).digest('hex');
+		return require('crypto').createHash('sha1').update(JSON.stringify(pGraph || {})).digest('hex');
 	}
 
 	/**

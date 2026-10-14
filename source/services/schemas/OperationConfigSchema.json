@@ -87,7 +87,7 @@
 		"ResetMode":                "'Append' (default) | 'Replace'. Replace soft-deletes rows in TargetTable whose GUID didn't appear in the new run before completion — keeps cached views from accumulating orphans when source data churns.",
 		"Concurrency":              "Optional per-op override of the bulk-Upsert client-side parallelism. 0 / null = compiler default (5 for typed ops). Clamped to [1,5] in WriteRecords.",
 		"CompiledOperationHash":    "The UV-assigned hash of the most recently compiled-and-registered Operation graph for this OperationConfig. Reused on subsequent runs as long as CompiledOperationConfigHash still matches the live OperationConfiguration JSON.",
-		"CompiledOperationConfigHash": "SHA-1 of the canonical OperationConfiguration JSON used to produce CompiledOperationHash. Cache invalidator — when this no longer matches the live JSON, the bridge recompiles + re-registers.",
+		"CompiledOperationConfigHash": "SHA-1 of the COMPILED GRAPH that produced CompiledOperationHash (not of the OperationConfiguration JSON). Cache invalidator — when a re-compile yields a different graph, whether because the configuration changed or because a compiler did, this no longer matches and the bridge recompiles + re-registers.",
 		"ScopeHashIndex":           "UNIQUE index UX_OperationConfig_ScopeHash matches the partial index in init-platform-configs.sql by name. EnsureSchema uses CREATE [UNIQUE] INDEX IF NOT EXISTS, so re-creating against an already-bootstrapped DB is a no-op."
 	}
 }
